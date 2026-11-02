@@ -1,159 +1,140 @@
 #!/usr/bin/env python3
 """
-injector3d — генерация 3D-сцен трубок для Blender.
+injector3d — entry-point для шага 1: геометрия трубки.
 
-Шаг 1: Создание геометрии трубки с точным профилем и скруглёнными кромками.
+Собирает модули:
+  - tube_geometry.create_tube()
+  - scene.setup_scene()
+  - render.render_tube()
+  - валидация (габариты, замкнутость, объём)
 """
 
-import bpy
-import math
-import os
 import sys
+import os
 
-# Добавляем корень проекта в путь
+# Добавляем корень пакета в sys.path (при запуске `python create_scene.py`)
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+# Импорт ПОСЛЕ изменения sys.path (bpy доступен только внутри Blender)
+import bpy
+import bmesh
+import math
+
+from injector3d.tube_geometry import create_tube
+from injector3d.scene import setup_scene
+from injector3d.render import render_tube
+from injector3d import config as cfg
 from injector3d.config import (
-    MM,
     INNER_DIAMETER,
     HEIGHT,
     WALL_THICKNESS,
-    OUTPUT_DIR,
+    MM,
     RENDER_RESOLUTION,
-    RENDER_SAMPLES,
-    DENOISER,
-    TILT_VARIANTS,
-    CAMERA_POSITION,
-    CAMERA_LENS,
-    CAMERA_FSTOP,
-    CAMERA_SENSOR,
-    CAMERA_TARGET,
 )
-from injector3d.tube_geometry import create_tube
 
 
-def setup_scene():
-    """Настройка сцены и материалов."""
-    # Очистка
-    bpy.ops.wm.read_factory_settings(use_empty=True)
+def validate_tube(tube):
+    """Валидация геометрии: габариты, замкнутость, объём, manifold.
 
-    # Cycles
-    bpy.context.scene.render.engine = 'CYCLES'
-    bpy.context.scene.cycles.device = 'CPU'
-    bpy.context.scene.cycles.samples = RENDER_SAMPLES
-    bpy.context.scene.cycles.preview_samples = 32
-    bpy.context.scene.cycles.caustics_reflective = True
-    bpy.context.scene.cycles.caustics_refractive = True
-    bpy.context.scene.cycles.denoiser = DENOISER
+    Все метрики считаются за один проход по bmesh: у `bpy.types.Mesh` в
+    Blender 4.3 нет ни `link_faces` у рёбер, ни `bound_box`, поэтому
+    работать приходится напрямую с вершинами/granями bmesh.
 
-    # Разрешаем все CPU-ядра
-    prefs = bpy.context.preferences
-    addon = prefs.addons.get('cycles')
-    if addon:
-        prefs.cycles.compute_device_type = 'CPU'
-        prefs.cycles.devices[0].use = True
+    Трубка имеет открытое отверстие сверху, поэтому рёбра верхней кромки
+    легально имеют ровно 1 связанную грань (boundary).  Ошибкой считаются
+    рёбра с 0 или 3+ гранями.
+    """
+    me = tube.data
+    assert len(me.vertices) > 0, "Трубка: нет вершин"
+    assert len(me.polygons) > 0, "Трубка: нет полигонов"
+    me.calc_loop_triangles()
 
-    # Камера
-    bpy.ops.object.camera_add(location=CAMERA_POSITION)
-    cam = bpy.context.active_object
-    cam.name = "Camera"
-    cam.data.lens = CAMERA_LENS
-    cam.data.sensor_width = CAMERA_SENSOR
-    cam.data.dof.use_dof = True
-    cam.data.dof.aperture_fstop = CAMERA_FSTOP
-    cam.data.dof.focus_distance = math.dist(CAMERA_POSITION, CAMERA_TARGET)
+    bm = bmesh.new()
+    bm.from_mesh(me)
 
-    # Следит за трубкой
-    track = cam.constraints.new('TRACK_TO')
-    track.target = None  # будет установлен после создания трубки
-    track.track_axis = 'TRACK_NEGATIVE_Z'
-    track.up_axis = 'UP_Y'
+    bad = [e for e in bm.edges if len(e.link_faces) not in (1, 2)]
+    boundary = [e for e in bm.edges if len(e.link_faces) == 1]
+    degenerate = [f for f in bm.faces if f.calc_area() <= 1e-15]
 
-    # Освещение
-    _setup_lighting()
+    # Верхняя кромка (z ≈ H) — единственное место с boundary-рёбрами
+    z_top = HEIGHT * MM
+    stray = [e for e in boundary
+             if abs(e.verts[0].co.z - z_top) > 1e-6
+             or abs(e.verts[1].co.z - z_top) > 1e-6]
 
-    # Фон
-    _setup_background()
+    vol_mm3 = bm.calc_volume(signed=True) / (MM ** 3)
+    normals_out = vol_mm3 > 0
 
-    return cam
+    xs = [v.co.x for v in bm.verts]
+    ys = [v.co.y for v in bm.verts]
+    zs = [v.co.z for v in bm.verts]
+    bm.free()
 
+    diam_x = (max(xs) - min(xs)) / MM
+    diam_y = (max(ys) - min(ys)) / MM
+    z_mm = (max(zs) - min(zs)) / MM
+    z_min = min(zs) / MM
+    expected_diam = INNER_DIAMETER + WALL_THICKNESS * 2
 
-def _setup_lighting():
-    """Студийное освещение."""
-    lights = [
-        ("Key", (0.8, -0.5, 0.6), 5000, 0.7),
-        ("Fill", (-0.6, -0.4, 0.3), 2000, 0.4),
-        ("Rim", (0.0, 0.8, 0.5), 3000, 0.5),
-    ]
-    for name, loc, energy, angle in lights:
-        bpy.ops.object.light_add(type='AREA', location=loc)
-        light = bpy.context.active_object
-        light.name = name + "_Light"
-        light.data.energy = energy
-        light.data.size = 1.0
-        light.data.angle_x = math.radians(angle)
-        light.data.angle_y = math.radians(angle)
+    assert not bad, f"Трубка: {len(bad)} non-manifold рёбер"
+    assert not stray, f"Трубка: {len(stray)} boundary-рёбер вне верхней кромки"
+    assert not degenerate, f"Трубка: {len(degenerate)} вырожденных граней"
+    assert normals_out, "Трубка: нормали направлены внутрь"
+    assert abs(z_mm - HEIGHT) < 0.01, \
+        f"Трубка: высота {z_mm:.3f}мм != {HEIGHT}мм"
+    assert abs(z_min) < 0.01, f"Трубка: дно на z={z_min:.3f}мм, ожидалось 0"
+    assert abs(diam_x - expected_diam) < 0.01, \
+        f"Трубка: диаметр X {diam_x:.3f}мм != {expected_diam}мм"
+    assert abs(diam_y - expected_diam) < 0.01, \
+        f"Трубка: диаметр Y {diam_y:.3f}мм != {expected_diam}мм"
 
+    # Ожидаемый объём материала — точная формула без учёта скруглений;
+    # расхождение не должно превышать вклад самих галтелей.
+    exp_mm3 = math.pi * (cfg.OUTER_RADIUS ** 2 * HEIGHT
+                         - cfg.INNER_RADIUS ** 2
+                         * (HEIGHT - cfg.BOTTOM_THICKNESS))
+    drift = abs(vol_mm3 - exp_mm3) / exp_mm3
+    assert drift < 0.01, \
+        f"Трубка: объём {vol_mm3:.2f} мм³ отличается от расчётного " \
+        f"{exp_mm3:.2f} мм³ на {drift * 100:.2f}%"
 
-def _setup_background():
-    """Серый градиентный фон."""
-    world = bpy.data.worlds['World']
-    world.use_nodes = True
-    bg = world.node_tree.nodes['Background']
-    bg.inputs['Color'].default_value = (0.15, 0.15, 0.15, 1.0)
-    bg.inputs['Strength'].default_value = 1.0
-
-
-def render_tube(tube, camera):
-    """Рендер трубки под разными углами наклона."""
-    os.makedirs(OUTPUT_DIR, exist_ok=True)
-
-    for variant_name, tilt_euler in TILT_VARIANTS:
-        # Устанавливаем наклон
-        tube.rotation_euler = (
-            math.radians(tilt_euler[0]),
-            math.radians(tilt_euler[1]),
-            math.radians(tilt_euler[2]),
-        )
-        bpy.context.view_layer.update()
-
-        # Сохраняем .blend
-        blend_path = os.path.join(OUTPUT_DIR, "1_" + variant_name + ".blend")
-        bpy.ops.wm.save_as_mainfile(filepath=blend_path)
-        print(f"Saved: {blend_path}")
-
-        # Рендер
-        bpy.context.scene.render.filepath = os.path.join(
-            OUTPUT_DIR, "1_" + variant_name + ".png"
-        )
-        bpy.context.scene.render.image_settings.file_format = 'PNG'
-        bpy.context.scene.render.image_settings.color_mode = 'RGBA'
-        bpy.context.scene.render.resolution_x = RENDER_RESOLUTION[0]
-        bpy.context.scene.render.resolution_y = RENDER_RESOLUTION[1]
-
-        bpy.ops.render.render(write_standalone=True)
-        print(f"Rendered: {variant_name} (tilt={tilt_euler})")
+    print(f"  вершин={len(me.vertices)}  полигонов={len(me.polygons)}  "
+          f"треугольников={len(me.loop_triangles)}")
+    print(f"  рёбра: non-manifold={len(bad)}  "
+          f"boundary(кромка)={len(boundary)}  вырожденных граней={len(degenerate)}")
+    print(f"  габариты: ⌀{diam_x:.3f}×{diam_y:.3f}мм, высота {z_mm:.3f}мм")
+    print(f"  объём материала: {vol_mm3:.2f} мм³ "
+          f"(расчётно {exp_mm3:.2f}, отклонение {drift * 100:.2f}%)")
+    return True
 
 
 def main():
     """Точка входа."""
-    print("Setting up scene...")
-    camera = setup_scene()
-    print("Scene ready.")
+    print("=== injector3D — Шаг 1: Геометрия трубки ===\n")
 
-    print("Creating tube geometry...")
+    # 1. Сцена
+    print("1/4  Настройка сцены...")
+    camera = setup_scene()
+    print("   ✅ Сцена готова.\n")
+
+    # 2. Геометрия
+    print("2/4  Создание геометрии трубки...")
     tube = create_tube("Tube")
     tube.data.name = "Tube_Mesh"
-    print(f"Tube created: {tube.name} "
-          f"(ID={INNER_DIAMETER}mm, H={HEIGHT}mm, "
-          f"W={WALL_THICKNESS}mm)")
+    print(f"   ✅ {tube.name}: ID={INNER_DIAMETER}мм, H={HEIGHT}мм, "
+          f"W={WALL_THICKNESS}мм\n")
 
-    # Устанавливаем камеру на трубку
-    camera.constraints[0].target = tube
+    # 3. Валидация
+    print("3/4  Валидация...")
+    validate_tube(tube)
+    print("   ✅ Готово.\n")
 
-    print("Rendering...")
-    render_tube(tube, camera)
-    print("Done!")
+    # 4. Рендер
+    print("4/4  Рендер под 5 углами...")
+    render_tube(tube, camera, step='1')
+    print("   ✅ Готово.\n")
+
+    print("=== Шаг 1 завершён ===")
 
 
 if __name__ == "__main__":
