@@ -4,6 +4,8 @@ injector3d — entry-point для шага 1: геометрия трубки.
 
 Собирает модули:
   - tube_geometry.create_tube()
+  - materials.create_material_plastic() / create_material_liquid()
+  - liquid.create_liquid()
   - scene.setup_scene()
   - render.render_tube()
   - валидация (габариты, замкнутость, объём)
@@ -21,6 +23,8 @@ import bmesh
 import math
 
 from injector3d.tube_geometry import create_tube
+from injector3d.materials import create_material_plastic, create_material_liquid
+from injector3d.liquid import create_liquid, liquid_volume_mm3
 from injector3d.scene import setup_scene
 from injector3d.render import render_tube
 from injector3d import config as cfg
@@ -113,24 +117,40 @@ def main():
     print("=== injector3D — Шаг 1: Геометрия трубки ===\n")
 
     # 1. Сцена
-    print("1/4  Настройка сцены...")
+    print("1/5  Настройка сцены...")
     camera = setup_scene()
     print("   ✅ Сцена готова.\n")
 
     # 2. Геометрия
-    print("2/4  Создание геометрии трубки...")
+    print("2/5  Создание геометрии трубки...")
     tube = create_tube("Tube")
     tube.data.name = "Tube_Mesh"
     print(f"   ✅ {tube.name}: ID={INNER_DIAMETER}мм, H={HEIGHT}мм, "
           f"W={WALL_THICKNESS}мм\n")
 
     # 3. Валидация
-    print("3/4  Валидация...")
+    print("3/5  Валидация...")
     validate_tube(tube)
     print("   ✅ Готово.\n")
 
-    # 4. Рендер
-    print("4/4  Рендер под 5 углами...")
+    # 4. Материалы
+    print("4/5  Назначение материалов...")
+    mat_plastic = create_material_plastic("Plastic")
+    mat_liquid = create_material_liquid("Liquid")
+    tube.data.materials.append(mat_plastic)
+    print(f"   ✅ Трубка: {tube.data.materials[0].name}")
+
+    # Жидкость (50% заполнения)
+    fill_level = 0.5
+    liquid = create_liquid("Liquid", fill_level=fill_level)
+    liquid.data.materials.append(mat_liquid)
+    vol_mm3 = liquid_volume_mm3(fill_level)
+    print(f"   ✅ Жидкость: {liquid.data.materials[0].name}, "
+          f"заполнение {fill_level*100:.0f}%, объём {vol_mm3:.2f} мм³")
+    print("   ✅ Готово.\n")
+
+    # 5. Рендер
+    print("5/5  Рендер под 5 углами...")
     render_tube(tube, camera, step='1')
     print("   ✅ Готово.\n")
 
