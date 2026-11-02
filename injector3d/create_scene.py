@@ -129,7 +129,11 @@ def validate_tube(tube):
 def main():
     """Точка входа."""
     step = parse_step()
-    print(f"=== injector3D — Пункт {step}: материалы и жидкость ===\n")
+    # Пункты 1–3 описывают геометрию: материалы и жидкость появляются
+    # только с пункта 4, поэтому до него рендерим «голую» трубку.
+    with_materials = int(step) >= 4
+    print(f"=== injector3D — Пункт {step}"
+          f"{' + материалы' if with_materials else ' (геометрия)'} ===\n")
 
     # 1. Сцена
     print("1/5  Настройка сцены...")
@@ -150,22 +154,25 @@ def main():
 
     # 4. Материалы
     print("4/5  Назначение материалов...")
-    mat_plastic = create_material_plastic("Plastic")
-    mat_liquid = create_material_liquid("Liquid")
-    tube.data.materials.append(mat_plastic)
-    print(f"   ✅ Трубка: {tube.data.materials[0].name} "
-          f"(IOR={cfg.IOR_PMMA}, transmission=1.0, roughness=0.0)")
+    if not with_materials:
+        print("   ⏭  Пропущено: материалы подключаются с пункта 4")
+    else:
+        mat_plastic = create_material_plastic("Plastic")
+        mat_liquid = create_material_liquid("Liquid")
+        tube.data.materials.append(mat_plastic)
+        print(f"   ✅ Трубка: {tube.data.materials[0].name} "
+              f"(IOR={cfg.IOR_PMMA}, transmission=1.0, roughness=0.0)")
 
-    # Жидкость (50% заполнения)
-    fill_level = 0.5
-    liquid = create_liquid("Liquid", fill_level=fill_level)
-    liquid.data.materials.append(mat_liquid)
-    # Жидкость — дочерний объект трубки: наклон трубки наклоняет и столб
-    # жидкости.  Горизонтальный уровень в мировых координатах появится на
-    # пункте 2 (срез плоскостью), здесь важна целостность узла.
-    liquid.parent = tube
-    vol_mm3 = liquid_volume_mm3(fill_level)
-    print(f"   ✅ Жидкость: {liquid.data.materials[0].name} "
+        # Жидкость (50% заполнения)
+        fill_level = 0.5
+        liquid = create_liquid("Liquid", fill_level=fill_level)
+        liquid.data.materials.append(mat_liquid)
+        # Жидкость — дочерний объект трубки: наклон трубки наклоняет и столб
+        # жидкости.  Горизонтальный уровень в мировых координатах появится на
+        # пункте 2 (срез плоскостью), здесь важна целостность узла.
+        liquid.parent = tube
+        vol_mm3 = liquid_volume_mm3(fill_level)
+        print(f"   ✅ Жидкость: {liquid.data.materials[0].name} "
           f"(IOR=1.33, absorption density=0.5), "
           f"заполнение {fill_level*100:.0f}%, объём {vol_mm3:.2f} мм³")
     print("   ✅ Готово.\n")
