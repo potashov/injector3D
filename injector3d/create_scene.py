@@ -37,6 +37,20 @@ from injector3d.config import (
 )
 
 
+def parse_step(default="1"):
+    """Номер пункта плана из `blender ... --python file.py -- <шаг>`.
+
+    Номер попадает в имена файлов рендера, чтобы кадры разных пунктов
+    плана не перезаписывали друг друга.
+    """
+    argv = sys.argv
+    if "--" in argv:
+        tail = argv[argv.index("--") + 1:]
+        if tail and tail[0].strip().isdigit():
+            return tail[0].strip()
+    return default
+
+
 def validate_tube(tube):
     """Валидация геометрии: габариты, замкнутость, объём, manifold.
 
@@ -114,7 +128,8 @@ def validate_tube(tube):
 
 def main():
     """Точка входа."""
-    print("=== injector3D — Шаг 1: Геометрия трубки ===\n")
+    step = parse_step()
+    print(f"=== injector3D — Пункт {step}: материалы и жидкость ===\n")
 
     # 1. Сцена
     print("1/5  Настройка сцены...")
@@ -138,23 +153,29 @@ def main():
     mat_plastic = create_material_plastic("Plastic")
     mat_liquid = create_material_liquid("Liquid")
     tube.data.materials.append(mat_plastic)
-    print(f"   ✅ Трубка: {tube.data.materials[0].name}")
+    print(f"   ✅ Трубка: {tube.data.materials[0].name} "
+          f"(IOR={cfg.IOR_PMMA}, transmission=1.0, roughness=0.0)")
 
     # Жидкость (50% заполнения)
     fill_level = 0.5
     liquid = create_liquid("Liquid", fill_level=fill_level)
     liquid.data.materials.append(mat_liquid)
+    # Жидкость — дочерний объект трубки: наклон трубки наклоняет и столб
+    # жидкости.  Горизонтальный уровень в мировых координатах появится на
+    # пункте 2 (срез плоскостью), здесь важна целостность узла.
+    liquid.parent = tube
     vol_mm3 = liquid_volume_mm3(fill_level)
-    print(f"   ✅ Жидкость: {liquid.data.materials[0].name}, "
+    print(f"   ✅ Жидкость: {liquid.data.materials[0].name} "
+          f"(IOR=1.33, absorption density=0.5), "
           f"заполнение {fill_level*100:.0f}%, объём {vol_mm3:.2f} мм³")
     print("   ✅ Готово.\n")
 
     # 5. Рендер
-    print("5/5  Рендер под 5 углами...")
-    render_tube(tube, camera, step='1')
+    print(f"5/5  Рендер под 5 углами (пункт {step})...")
+    render_tube(tube, camera, step=step)
     print("   ✅ Готово.\n")
 
-    print("=== Шаг 1 завершён ===")
+    print(f"=== Пункт {step} завершён ===")
 
 
 if __name__ == "__main__":
