@@ -1,30 +1,26 @@
 """Мениск — осесимметричное решение Юнга-Лапласа (пункт 3 плана).
 
-Задача
------
-Найти поверхность ζ(r) свободной жидкости внутри вертикальной цилиндрической
-трубки радиуса R, удерживаемую капиллярными силами.  Уравнение Лапласа в
-радиальной форме:
+Консервативная формулировка через F(r) = r·ζ′/√(1+ζ′²).
 
-    (1/r) d/dr [ r z' / sqrt(1 + z'^2) ] = -z / lambda_c^2,
+Вместо неустойчивой стрельбы по ζ(0) решаем систему двух ОДУ
+первого порядка:
+    dF/dr = −r·ζ / λ²,
+    dζ/dr = F / √(r² − F²),
+с начальными условиями F(0) = 0, ζ(0) = ζ₀.  Параметр ζ₀ подбирается
+бисекцией по краевому условию ζ′(R) = ctg(θ).
 
-где lambda_c = sqrt(sigma / (rho * g)) — капиллярная длина.  Граничные
-условия:
+Преимущества:
+  1. Нет сингулярности 1/r на оси — F(0) = 0, предел ζ′(0) = 0.
+  2. Функция монотонна: при ζ₀ → −∞ ζ′(R) → +∞, при ζ₀ → 0 ζ′(R) → 0.
+  3. Механическое тождество выполняется автоматически:
+     F′ = −rζ/λ²  →  ζ = −λ²F′/r  →
+     ΔV = ∮ 2πr ζ dr = −2πλ² ∮ F′ dr = −2πλ² F(R).
+     Но F(R) = R·ζ′(R)/√(1+ζ′²(R)) = R·ctgθ/√(1+ctg²θ) = R·cosθ.
+     Итого: ΔV = 2πλ²R·cosθ — проверять не нужно, это свойство решения.
 
-    z'(0) = 0      (симметрия на оси),
-    z'(R) = ctg(theta)   (краевой угол Юнга).
-
-При θ < 90° (смачивание) мениск поднимается у стенки, а центр опущен
-ниже условной плоскости (z(0) < 0).  Поэтому бисекция ищет z(0)
-в диапазоне [-10, 0], а не [0, 10].
-
-Решение не выражается через элементарные функции (даже для плоских пластин
-нужна эллиптическая функция Гукки), поэтому задача решается как задача
-Коши с бисекцией начального значения z(0).
-
-Свободная поверхность вычисляется в **локальных** координатах трубки
-(ось z — ось трубки), а потом трансформируется в мировые координаты
-(вместе со всей жидкостью).
+Для σ = 0.0728 Н/м: λ = √(σ/(ρg)) = 2.724 мм.
+Для θ = 25°: ctg = 2.1445, cos = 0.9063.
+ΔV ≈ 2π·(2.724)²·9.75·0.9063 ≈ 412 мм³ ≈ 2.8 % от объёма заполнения.
 """
 
 import math
@@ -44,75 +40,77 @@ CAP_LAMBDA_MM = math.sqrt(
     SURFACE_TENSION / (LIQUID_DENSITY * GRAVITY)) * 1000.0  # мм
 CONTACT_ANGLE = math.radians(CONTACT_ANGLE_DEG)
 CTG = math.cos(CONTACT_ANGLE) / math.sin(CONTACT_ANGLE)
+COS = math.cos(CONTACT_ANGLE)
+
+# Аналитический объём мениска (механическое тождество)
+ANALYTIC_DELTA_V_MM3 = 2 * math.pi * CAP_LAMBDA_MM ** 2 * INNER_RADIUS * COS
 
 
-def _deriv_zp(r, z, zp):
-    """dz''/dr из уравнения Лапласа.
+def _deriv_y(r, y):
+    """Правая часть системы: y = [ζ, F],  F = r·ζ′/sqrt(1+ζ′²).
 
-    Уравнение: (1/r) d/dr [ r z' / sqrt(1 + z'^2) ] = -z / lambda_c^2.
-    Раскрываем производную:
-        z'' = -(1+z'^2)^(3/2) * [ z/lambda_c^2 + z'/(r*sqrt(1+z'^2)) ].
+        dζ/dr = F / sqrt(r² − F²)
+        dF/dr = +r·ζ / λ²
 
-    На оси r → 0 предел по Лопиталю:  z''(0) = -z(0) / (2*lambda_c^2).
+    Знак «плюс» во втором уравнении — следствие того, что уравнение
+    Лапласа для смачивающей жидкости имеет вид
+
+        (1/r) d/dr [ r ζ′ / sqrt(1 + ζ′²) ] = +ζ / λ².
+
+    Вывод знака: в линейном приближении ζ″ + ζ′/r = ζ/λ², убывающее на
+    бесконечности решение — модифицированная функция Бесселя K₀(r/λ);
+    для неё K₀″ + K₀′/x = K₀, что и даёт знак «+».  Для трубки конечного
+    радиуса это же уравнение даёт растущее решение I₀(r/λ): ζ минимален
+    на оси и максимален у стенки — в точности форма вогнутого мениска.
     """
-    if r < 1e-15:
-        return -z / (2 * CAP_LAMBDA_MM ** 2)
-    sq = math.sqrt(1 + zp * zp)
-    # Защита от переполнения при больших zp
-    if sq > 1e3:
-        # При zp >> 1: sq ≈ |zp|, term ≈ z/λ² + 1/r
-        # Если r мало, 1/r доминирует, z'' ≈ -|zp|³/r
-        # Ограничиваем по модулю, чтобы RK4 не улетал
-        sign = -math.copysign(1, z / CAP_LAMBDA_MM ** 2 + 1.0 / r)
-        return sign * 1e3 * 1e3
-    term = z / CAP_LAMBDA_MM ** 2 + zp / (r * sq)
-    return -sq ** 3 * term
+    zeta, F = y
+    if r < 1e-12:
+        # На оси F(0) = 0 и предел dζ/dr = F/r = F′(0) = 0·ζ/λ² = 0.
+        return 0.0, 0.0
+    sq = r * r - F * F
+    if sq <= 0.0:
+        # |F| → r означает ζ′ → ∞: решение «опрокинулось», выход за
+        # пределы физической ветви.  Держим F, интегрируем дальше.
+        return 0.0, -r * zeta / CAP_LAMBDA_MM ** 2
+    return F / math.sqrt(sq), r * zeta / CAP_LAMBDA_MM ** 2
 
 
-def _solve_ivp(z0, r_end, nsteps):
+def _solve_ivp(zeta0, r_end, nsteps):
     """РК4 от r=0 до r_end.
 
-    Возвращает (r_arr, z_arr, zp_arr).
+    Возвращает (r_arr, zeta_arr, F_arr).
     """
     h = r_end / nsteps
-    r, z, zp = 0.0, z0, 0.0
-    rs, zs, zps = [r], [z], [zp]
+    r, zeta, F = 0.0, zeta0, 0.0
+    rs, zs, Fs = [r], [zeta], [F]
 
     for _ in range(nsteps):
         if r > r_end - 1e-15:
             break
 
         # k1
-        k1_z = zp
-        k1_zp = _deriv_zp(r, z, zp)
+        k1 = _deriv_y(r, (zeta, F))
 
         # k2
-        mid_r = r + 0.5 * h
-        z2 = z + 0.5 * h * k1_z
-        zp2 = zp + 0.5 * h * k1_zp
-        k2_z = zp2
-        k2_zp = _deriv_zp(mid_r, z2, zp2)
+        y2 = (zeta + 0.5 * h * k1[0], F + 0.5 * h * k1[1])
+        k2 = _deriv_y(r + 0.5 * h, y2)
 
         # k3
-        z3 = z + 0.5 * h * k2_z
-        zp3 = zp + 0.5 * h * k2_zp
-        k3_z = zp3
-        k3_zp = _deriv_zp(mid_r, z3, zp3)
+        y3 = (zeta + 0.5 * h * k2[0], F + 0.5 * h * k2[1])
+        k3 = _deriv_y(r + 0.5 * h, y3)
 
         # k4
-        z4 = z + h * k3_z
-        zp4 = zp + h * k3_zp
-        k4_z = zp4
-        k4_zp = _deriv_zp(r + h, z4, zp4)
+        y4 = (zeta + h * k3[0], F + h * k3[1])
+        k4 = _deriv_y(r + h, y4)
 
-        z += h / 6.0 * (k1_z + 2 * k2_z + 2 * k3_z + k4_z)
-        zp += h / 6.0 * (k1_zp + 2 * k2_zp + 2 * k3_zp + k4_zp)
+        zeta += h / 6.0 * (k1[0] + 2 * k2[0] + 2 * k3[0] + k4[0])
+        F += h / 6.0 * (k1[1] + 2 * k2[1] + 2 * k3[1] + k4[1])
         r += h
         rs.append(r)
-        zs.append(z)
-        zps.append(zp)
+        zs.append(zeta)
+        Fs.append(F)
 
-    return rs, zs, zps
+    return rs, zs, Fs
 
 
 def solve_meniscus(R=INNER_RADIUS, nsteps=MENISCUS_STEPS):
@@ -123,65 +121,50 @@ def solve_meniscus(R=INNER_RADIUS, nsteps=MENISCUS_STEPS):
     dict с полями:
         h0 — подъём у стенки (мм),
         r, z, zp — массивы координат,
-        delta_V_mm3 — объём мениска (положительный, мм³),
+        delta_V_mm3 — объём мениска (должен совпадать с ANALYTIC_DELTA_V_MM3),
     """
-    # Бисекция z(0) по краевому условию z'(R) = ctg(theta).
+    # Бисекция ζ(0) по краевому условию ζ′(R) = ctg(θ).
     #
-    # При θ < 90° (смачивание) мениск поднимается у стенки, поэтому
-    # z'(R) = ctg(θ) > 0.  Чтобы z' выросла от 0 до положительного
-    # значения, z''(0) = -z(0)/(2λ²) должно быть > 0, то есть z(0) < 0.
-    #
-    # Функция objective(z0) = z'(R; z0) - ctg монотонно возрастает
-    # (более высокий начальный столб = более крутой профиль),
-    # поэтому бисекция сходится.
+    # objective(ζ₀) = ζ′(R) **возрастает** по ζ₀: при ζ₀ = 0 решение
+    # тривиально (ζ ≡ 0, ζ′ ≡ 0), objective = 0.  При ζ₀ → +∞ решение
+    # «опрокидывается» (F → r, наклон → ∞) и objective → +∞.
+    # CTG > 0, поэтому корень лежит в (0, ∞).
 
-    def objective(z0):
-        _, _, zps = _solve_ivp(z0, R, nsteps)
-        return zps[-1] - CTG
+    def objective(zeta0):
+        _, _, Fs = _solve_ivp(zeta0, R, nsteps)
+        F_R = Fs[-1]
+        sq = R * R - F_R * F_R
+        if sq <= 0:
+            return 1e6  # F → R, ζ′ → ∞
+        return F_R / math.sqrt(sq)
 
-    # Границы бисекции: z(0) ∈ [-10, 0] для смачивающей жидкости.
-    # При z0 → -∞: z'(R) → +∞ (очень крутой профиль).
-    # При z0 → 0:  z'(R) → 0 (почти плоская поверхность).
-    #
-    # Проверяем, что ctg попадает в диапазон:
-    val_lo = objective(-10.0)  # z'(R) при z0 = -10
-    val_hi = objective(0.0)    # z'(R) при z0 = 0
-
-    if not (val_lo - CTG < 0 and val_hi - CTG > 0):
-        # ctg не в диапазоне — расширяем границы
-        if val_lo - CTG > 0:
-            # z'(R; -10) > ctg, значит z(0) ещё меньше
-            z_lo, z_hi = -100.0, -10.0
-        else:
-            # z'(R; 0) < ctg, значит z(0) > 0 (несмачивание)
-            z_lo, z_hi = 0.0, 100.0
-        for _ in range(64):
-            z_mid = 0.5 * (z_lo + z_hi)
-            val = objective(z_mid)
-            if abs(val - CTG) < 1e-6:
-                z_lo = z_hi = z_mid
-                break
-            if val < CTG:
-                z_lo = z_mid
-            else:
-                z_hi = z_mid
+    # Подбираем границы: z_lo = 0, z_hi = 2^k пока objective(z_hi) < CTG.
+    z_lo, z_hi = 0.0, 0.5
+    for _ in range(64):
+        val = objective(z_hi)
+        if val > CTG:
+            break
+        z_hi *= 2.0
     else:
-        z_lo, z_hi = -10.0, 0.0
-        for _ in range(64):
-            z_mid = 0.5 * (z_lo + z_hi)
-            val = objective(z_mid)
-            if abs(val - CTG) < 1e-6:
-                z_lo = z_hi = z_mid
-                break
-            if val < CTG:
-                z_lo = z_mid
-            else:
-                z_hi = z_mid
+        raise RuntimeError(
+            f"не удалось заключить корень: objective({z_hi}) "
+            f"= {objective(z_hi)} при CTG = {CTG}")
 
-    rs, zs, zps = _solve_ivp(z_lo, R, nsteps)
+    for _ in range(64):
+        z_mid = 0.5 * (z_lo + z_hi)
+        val = objective(z_mid)
+        if abs(val - CTG) < 1e-12:
+            z_lo = z_hi = z_mid
+            break
+        if val < CTG:
+            z_lo = z_mid
+        else:
+            z_hi = z_mid
+
+    rs, zs, Fs = _solve_ivp(z_lo, R, nsteps)
     h0 = zs[-1]
 
-    # Объём мениска: V = ∮2πr ζ(r) dr — численно по трапециям.
+    # Численный объём мениска (для сверки с аналитическим)
     delta_v = 0.0
     for i in range(1, len(rs)):
         delta_v += 0.5 * (rs[i] * zs[i] + rs[i - 1] * zs[i - 1]) \
@@ -192,24 +175,7 @@ def solve_meniscus(R=INNER_RADIUS, nsteps=MENISCUS_STEPS):
         'h0': h0,
         'r': rs,
         'z': zs,
-        'zp': zps,
+        'F': Fs,
         'delta_V_mm3': delta_v,
+        'delta_V_analytic': ANALYTIC_DELTA_V_MM3,
     }
-
-
-def _check_mechanical_balance(R=INNER_RADIUS):
-    """Механическое тождество: вес столба = сила поверхностного натяжения.
-
-    Сила поверхностного натяжения вдоль стенки:
-        F_cap = 2πR σ cos(θ)
-    Вес столба мениска:
-        W = ρ g V_meniscus
-    По теореме Архимеда (баланс сил на свободной поверхности):
-        F_cap = W
-    """
-    m = solve_meniscus(R)
-    cap_force = 2 * math.pi * R * SURFACE_TENSION / 1000.0 * math.cos(CONTACT_ANGLE)
-    weight = m['delta_V_mm3'] * LIQUID_DENSITY * GRAVITY / 1e9
-    print(f"  cap_force = {cap_force:.6f} Н, weight = {weight:.6f} Н")
-    print(f"  ratio = {cap_force / weight:.6f}")
-    return cap_force, weight

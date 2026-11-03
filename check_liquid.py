@@ -32,7 +32,13 @@ from injector3d.liquid import (
     target_volume_mm3,
     volume_at_level,
 )
-from injector3d.config import MM, INNER_RADIUS, HEIGHT, BOTTOM_THICKNESS
+from injector3d.config import (
+    MM,
+    INNER_RADIUS,
+    HEIGHT,
+    BOTTOM_THICKNESS,
+    REVOLVE_SEGMENTS,
+)
 
 
 def matrix_for(tilt_deg_x=0.0, tilt_deg_y=0.0):
@@ -96,7 +102,7 @@ def main():
         for frac in (0.02, 0.05, 0.5, 0.9):
             level, vol, spilled = solve_level_for_volume(
                 mw, target_volume_mm3(frac))
-            bm = _liquid_bmesh(mw, level)
+            bm = _liquid_bmesh(mw, level, REVOLVE_SEGMENTS)
             if bm is None:
                 print(f"  θ={tilt:4.1f}° {frac*100:4.0f}%: жидкости нет")
                 ok = False
