@@ -15,7 +15,7 @@ from .config import (
 )
 
 
-def render_tube(tube, camera, step='1'):
+def render_tube(tube, camera, step='1', on_tilt=None):
     """Рендер трубки под каждым из TILT_VARIANTS.
 
     Parameters
@@ -26,6 +26,9 @@ def render_tube(tube, camera, step='1'):
         Объект камеры.
     step : str
         Номер шага для именования файлов.
+    on_tilt : callable | None
+        Вызывается после установки поворота трубки — перестроить жидкость
+        под новую ориентацию (её уровень горизонтален в мировых координатах).
     """
     ts = time.strftime('%Y%m%d_%H%M%S')
     base = os.path.join(OUTPUT_DIR, step)
@@ -39,6 +42,8 @@ def render_tube(tube, camera, step='1'):
             math.radians(tilt_euler[2]),
         )
         bpy.context.view_layer.update()
+        if on_tilt is not None:
+            on_tilt(variant_name, tilt_euler)
 
         # Сохраняем .blend
         blend_fname = f'{step}_{variant_name}_{ts}.blend'
