@@ -20,7 +20,7 @@
 
 Для σ = 0.0728 Н/м: λ = √(σ/(ρg)) = 2.724 мм.
 Для θ = 25°: ctg = 2.1445, cos = 0.9063.
-ΔV ≈ 2π·(2.724)²·9.75·0.9063 ≈ 412 мм³ ≈ 2.8 % от объёма заполнения.
+ΔV ≈ 2π·(2.724)²·9.5·0.9063 ≈ 401 мм³ ≈ 3.1 % от объёма заполнения.
 """
 
 import math
@@ -31,7 +31,6 @@ from .config import (
     LIQUID_DENSITY,
     GRAVITY,
     CONTACT_ANGLE_DEG,
-    MENISCUS_RINGS,
     MENISCUS_STEPS,
 )
 

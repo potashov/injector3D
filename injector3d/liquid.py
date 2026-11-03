@@ -38,6 +38,10 @@ from .config import (
 # 20 мкм неразличимы при масштабе сцены.
 CLEARANCE = 0.02
 
+# Мениск решаем для фактического радиуса меша жидкости, а не номинального
+# внутреннего радиуса трубки: иначе объём мениска систематически завышался бы.
+MENISCUS_RADIUS = INNER_RADIUS - CLEARANCE
+
 
 def capacity_mm3():
     """Номинальная вместимость полости, мм³."""
@@ -79,6 +83,27 @@ def _zeta_at(prof, r_mm):
     return zs[i] + t * (zs[i + 1] - zs[i])
 
 
+def meniscus_wall_rise_mm():
+    """Подъём жидкости у стенки относительно уровня на оси, мм."""
+    prof = _meniscus_profile(MENISCUS_RADIUS)
+    return prof['z'][-1] - prof['z'][0]
+
+
+def meniscus_volume_mm3():
+    """Объём жидкости между плоскостью уровня на оси и мениском, мм³."""
+    return _meniscus_profile(MENISCUS_RADIUS)['d_net']
+
+
+def _meniscus_rise_mm(distance_mm):
+    """Подъём свободной поверхности на расстоянии от стенки, мм.
+
+    distance_mm = 0 у стенки (максимальный подъём), растёт к оси.
+    """
+    prof = _meniscus_profile(MENISCUS_RADIUS)
+    r_mm = MENISCUS_RADIUS - max(0.0, distance_mm)
+    return _zeta_at(prof, r_mm) - prof['z'][0]
+
+
 # --- Построение меша ---
 
 def _build_flat_bmesh(mw, level_mm, segments):
@@ -116,97 +141,101 @@ def _build_flat_bmesh(mw, level_mm, segments):
     return bm
 
 
-def _build_meniscus_bmesh(mw, level_mm, segments):
-    """Параметрический меш с мениском.
+def _build_meniscus_bmesh(mw, level_mm, segments, rings=MENISCUS_RINGS):
+    """Меш жидкости с мениском, сохраняющим мировой горизонт.
 
-    level_mm — мировой уровень горизонта на оси трубки (мм).
+    level_mm — мировой уровень жидкости на оси (мм).
 
-    Алгоритм:
-    1. Строим цилиндр в локальных координатах трубки (ось Z совпадает с осью трубки).
-    2. Срезаем по плоскости z_local = h_level — это горизонт в системе трубки.
-    3. Вместо плоской крышки строим менисковую поверхность.
-    4. Трансформируем весь меш через mw.
+    Поверхность строится в мировых координатах: сначала полость режется
+    горизонтальной плоскостью на уровне кромки контакта
+    (level + подъём у стенки), затем плоская крышка заменяется радиальной
+    сеткой.  Высота каждой точки зависит только от расстояния до стенки,
+    поэтому при наклоне трубки поверхность не наклоняется вместе с ней,
+    а мениск подстраивается под эллиптическую кромку.
     """
+    rise_mm = meniscus_wall_rise_mm()
+    contact_mm = level_mm + rise_mm
+    contact_m = contact_mm * MM
+
+    # Плоскость кромки контакта должна целиком пересекать боковую стенку.
+    # Иначе (малое заполнение / сильный наклон / перелив) мениск не
+    # помещается — используем плоский горизонт.
     z0_m = (BOTTOM_THICKNESS + CLEARANCE) * MM
-    level_m = level_mm * MM
-    h_level_m = (level_m - mw[2][3]) / mw[2][2]
+    r_liq_m = (INNER_RADIUS - CLEARANCE) * MM
+    slope = math.hypot(mw[2][0], mw[2][1])
+    max_bottom_m = mw[2][3] + mw[2][2] * z0_m + r_liq_m * slope
+    if contact_m <= max_bottom_m + 1e-9:
+        return _build_flat_bmesh(mw, level_mm, segments)
+    if contact_m >= spill_level_mm(mw) * MM - 1e-9:
+        return _build_flat_bmesh(mw, level_mm, segments)
 
-    if h_level_m <= z0_m + 1e-9:
+    bm = _build_flat_bmesh(mw, contact_mm, segments)
+    if bm is None:
         return None
 
-    r_mesh = _equal_area_radius(INNER_RADIUS - CLEARANCE) * MM
-
-    bm = bmesh.new()
-
-    # 1. Плоский цилиндр в локальных координатах трубки (ось Z вдоль трубки)
-    bmesh.ops.create_cone(
-        bm, cap_ends=True, cap_tris=False, segments=segments,
-        radius1=r_mesh, radius2=r_mesh, depth=h_level_m - z0_m,
-    )
-    for v in bm.verts:
-        v.co.z += z0_m
-
-    # 2. Срезаем по горизонту (локальная координата)
-    zs = [v.co.z for v in bm.verts]
-    h = h_level_m
-    if h <= min(zs) + 1e-9:
-        bm.free()
-        return None
-    if h >= max(zs) - 1e-9:
+    # Верхняя крышка среза — плоская, на уровне кромки контакта.
+    cap_faces = [f for f in bm.faces
+                 if abs(f.calc_center_median().z - contact_m) < 1e-6
+                 and f.normal.z > 0.5]
+    boundary = list({v for f in cap_faces for v in f.verts})
+    if not cap_faces or len(boundary) < 3:
         return bm
 
-    bmesh.ops.bisect_plane(
-        bm, geom=bm.verts[:] + bm.edges[:] + bm.faces[:],
-        plane_co=(0.0, 0.0, h), plane_no=(0.0, 0.0, 1.0),
-        clear_outer=True,
-    )
-    bmesh.ops.holes_fill(bm, edges=bm.edges[:], sides=0)
+    # Центр эллипса среза — пересечение оси трубки с плоскостью контакта.
+    center_local_z = (contact_m - mw[2][3]) / mw[2][2]
+    center = mw @ Vector((0.0, 0.0, center_local_z))
+    cx, cy = center.x, center.y
+    boundary.sort(key=lambda v: math.atan2(v.co.y - cy, v.co.x - cx))
+
+    bmesh.ops.delete(bm, geom=cap_faces, context='FACES_ONLY')
+
+    n = len(boundary)
+    dist_mm = [math.hypot(v.co.x - cx, v.co.y - cy) / MM
+               for v in boundary]
+    center_v = bm.verts.new((cx, cy, level_mm * MM))
+
+    ring_prev = None
+    for k in range(1, rings):
+        s = k / rings
+        ring = []
+        for j, bv in enumerate(boundary):
+            px = cx + s * (bv.co.x - cx)
+            py = cy + s * (bv.co.y - cy)
+            d_mm = (1.0 - s) * dist_mm[j]
+            pz = (level_mm + _meniscus_rise_mm(d_mm)) * MM
+            ring.append(bm.verts.new((px, py, pz)))
+
+        if ring_prev is None:
+            for j in range(n):
+                bm.faces.new((center_v, ring[j], ring[(j + 1) % n]))
+        else:
+            for j in range(n):
+                jn = (j + 1) % n
+                bm.faces.new((ring_prev[j], ring_prev[jn],
+                              ring[jn], ring[j]))
+        ring_prev = ring
+
+    if ring_prev is None:
+        for j in range(n):
+            bm.faces.new((center_v, boundary[j], boundary[(j + 1) % n]))
+    else:
+        for j in range(n):
+            jn = (j + 1) % n
+            bm.faces.new((ring_prev[j], ring_prev[jn],
+                          boundary[jn], boundary[j]))
+
     bmesh.ops.recalc_face_normals(bm, faces=bm.faces)
     if bm.calc_volume(signed=True) < 0:
         bmesh.ops.reverse_faces(bm, faces=bm.faces)
 
-    # 3. Заменяем верхнюю крышку мениском
-    prof = _meniscus_profile(INNER_RADIUS)
-    zeta0 = prof['z'][0]
-
-    # Находим вершины верхней кромки
-    top_verts = [v for v in bm.verts if abs(v.co.z - h) < 1e-9]
-    if len(top_verts) < 3:
-        return bm
-
-    # Строим менисковые вершины
-    men_verts = []
-    for v in top_verts:
-        x, y = v.co.x, v.co.y
-        rr = math.sqrt(x * x + y * y)
-        if rr < 1e-9:
-            men_verts.append(v)
-            continue
-        zeta_r = _zeta_at(prof, rr / MM)
-        dz = (zeta_r - zeta0) * MM
-        v.co.z += dz
-        men_verts.append(v)
-
-    # 4. Трансформируем через mw
-    bmesh.ops.transform(bm, matrix=mw, verts=bm.verts)
-
     return bm
-
-
-def _is_vertical(mw):
-    """Трубка вертикальна, если её ось совпадает с мировой Z."""
-    return abs(mw[2][0]) < 1e-9 and abs(mw[2][1]) < 1e-9
 
 
 def _liquid_bmesh(mw, level_mm, segments):
     """Построение меша жидкости (плоский или менисковый)."""
-    if level_mm <= BOTTOM_THICKNESS + CLEARANCE:
+    if level_mm <= bottom_level_min_mm(mw) + 1e-9:
         return None
     if level_mm >= HEIGHT - CLEARANCE:
-        return _build_flat_bmesh(mw, level_mm, segments)
-    # Для вертикальной трубки мениск осесимметричен и не влияет на форму
-    # свободной поверхности в плоском сечении — используем плоский меш.
-    if _is_vertical(mw):
         return _build_flat_bmesh(mw, level_mm, segments)
     return _build_meniscus_bmesh(mw, level_mm, segments)
 
@@ -235,6 +264,18 @@ def spill_level_mm(mw):
     return min(zs) / MM
 
 
+def bottom_level_min_mm(mw):
+    """Мировой z самой низкой точки дна полости.
+
+    Для наклонённой трубки горизонт может опускаться ниже
+    BOTTOM_THICKNESS + CLEARANCE: жидкость занимает клин у нижнего края.
+    """
+    z0_m = (BOTTOM_THICKNESS + CLEARANCE) * MM
+    r_liq_m = (INNER_RADIUS - CLEARANCE) * MM
+    slope = math.hypot(mw[2][0], mw[2][1])
+    return (mw[2][3] + mw[2][2] * z0_m - r_liq_m * slope) / MM
+
+
 def solve_level_for_volume(mw, target_mm3,
                            tol_mm3=0.02, max_iter=48,
                            segments=REVOLVE_SEGMENTS):
@@ -249,7 +290,7 @@ def solve_level_for_volume(mw, target_mm3,
     (level_mm, volume_mm3, spilled)
         spilled=True — даже у самой кромки объёма не хватает.
     """
-    lo = BOTTOM_THICKNESS + CLEARANCE
+    lo = bottom_level_min_mm(mw)
     hi = spill_level_mm(mw)
 
     v_hi = volume_at_level(mw, hi, segments)

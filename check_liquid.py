@@ -10,11 +10,12 @@
 
     V(θ) = ∮ (h₀ + x·tgθ) dA = π r² h₀
 
-— объём от угла не зависит.  Отсюда два проверяемых следствия:
+— объём от угла не зависит.  Отсюда проверяемые следствия:
   1. бисекция возвращает один и тот же объём для всех θ (что и печатает
-     create_scene.py), и одно и то же положение горизонта вдоль оси;
-  2. мировой z этого горизонта = h₀·cos θ (ось наклонена на θ, начало
-     трубки в мировой высоте 0).
+     create_scene.py);
+  2. мениск добавляет к объёму постоянную величину, а его кромка остаётся
+     горизонтальной в мировых координатах при любом наклоне трубки —
+     поверхность жидкости не наклоняется вместе с трубкой.
 """
 
 import math
@@ -27,7 +28,10 @@ from mathutils import Euler
 
 from injector3d.liquid import (
     CLEARANCE,
+    _liquid_bmesh,
     capacity_mm3,
+    meniscus_volume_mm3,
+    meniscus_wall_rise_mm,
     solve_level_for_volume,
     target_volume_mm3,
     volume_at_level,
@@ -47,11 +51,6 @@ def matrix_for(tilt_deg_x=0.0, tilt_deg_y=0.0):
                  ).to_matrix().to_4x4()
 
 
-def axis_level_mm(level_mm, tilt_deg):
-    """Мировой уровень -> положение того же горизонта вдоль оси трубки."""
-    return level_mm / math.cos(math.radians(tilt_deg))
-
-
 def main():
     ok = True
 
@@ -69,34 +68,40 @@ def main():
           math.pi * INNER_RADIUS ** 2 * (HEIGHT - BOTTOM_THICKNESS), 1e-9)
 
     # 2. Объём как функция уровня монотонен и совпадает с формулой π r² h
-    #    (пока горизонт не задел дно и не перелился через край).
-    print("\n2. Вертикальная трубка: V = π r² h")
+    #    плюс объём мениска (пока горизонт не задел дно и не перелился).
+    print("\n2. Вертикальная трубка: V = π r² h + V_мениска")
     r_eff = INNER_RADIUS - CLEARANCE
+    v_men = meniscus_volume_mm3()
     for h in (10.0, 25.0, 50.0, 75.0):
         v = volume_at_level(matrix_for(), h)
         check(f"V(h={h:g})", v,
-              math.pi * r_eff ** 2 * (h - BOTTOM_THICKNESS - CLEARANCE), 0.02)
+              math.pi * r_eff ** 2 * (h - BOTTOM_THICKNESS - CLEARANCE)
+              + v_men, 0.2)
 
-    # 3. Наклон: объём не зависит от угла, мировой уровень = h₀·cos θ
-    print("\n3. Наклон: V(θ) = const, z(θ) = h₀·cos θ")
+    # 3. Наклон: объём не зависит от угла, кромка мениска остаётся
+    #    горизонтальной в мировых координатах (не наклоняется с трубкой).
+    print("\n3. Наклон: V(θ) = const, поверхность горизонтальна")
     target = target_volume_mm3(0.5)
-    h0 = None
+    rise = meniscus_wall_rise_mm()
     for tilt in (0.0, 10.0, 20.0, 30.0, 45.0):
         mw = matrix_for(tilt_deg_y=tilt)
         level, vol, spilled = solve_level_for_volume(mw, target)
         print(f"  θ={tilt:4.1f}°  уровень={level:8.4f} мм  "
               f"V={vol:10.4f} мм³  spilled={spilled}")
         check(f"V(θ={tilt:g})", vol, target, 0.02)
-        if h0 is None:
-            h0 = axis_level_mm(level, tilt)
-        check(f"z(θ={tilt:g})", level, h0 * math.cos(math.radians(tilt)), 1e-3)
+
+        bm = _liquid_bmesh(mw, level, REVOLVE_SEGMENTS)
+        zs = [v.co.z / MM for v in bm.verts]
+        bm.free()
+        z_top = max(zs)
+        rim = [z for z in zs if abs(z - z_top) < 1e-6]
+        check(f"z кромки θ={tilt:g}", z_top, level + rise, 1e-4)
+        check(f"разброс z кромки θ={tilt:g}", max(rim) - min(rim), 0.0, 1e-4)
 
     # 4. Краевые случаи: малое заполнение под наклоном.  Горизонт может
     #    оказаться ниже самой высокой точки наклонённого дна — тогда меш
     #    превращается в клин, и срез обязан остаться manifold.
     print("\n4. Краевые случаи (малый/большой уровень под наклоном)")
-    import bmesh
-    from injector3d.liquid import _liquid_bmesh
     for tilt in (0.0, 30.0, 60.0):
         mw = matrix_for(tilt_deg_y=tilt)
         for frac in (0.02, 0.05, 0.5, 0.9):

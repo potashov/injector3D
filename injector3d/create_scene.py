@@ -28,6 +28,7 @@ from injector3d.liquid import (
     create_liquid,
     build_liquid,
     capacity_mm3,
+    meniscus_wall_rise_mm,
     target_volume_mm3,
 )
 from injector3d.scene import setup_scene
@@ -132,10 +133,11 @@ def validate_tube(tube):
 
 
 def validate_liquid(liquid, target_mm3, info):
-    """Валидация объёма жидкости: manifold, объём, горизонтальность верха.
+    """Валидация объёма жидкости: manifold, объём, горизонтальность кромки.
 
-    Свободная поверхность обязана быть одной плоской гранью с нормалью
-    вдоль мировой +Z — это и есть физический горизонт.
+    Свободная поверхность может быть плоской (fallback у дна/перелива)
+    или менисковой, но её кромка/верх обязана лежать в горизонтальной
+    мировой плоскости — поверхность не наклоняется вместе с трубкой.
     """
     me = liquid.data
     assert len(me.vertices) > 0, "Жидкость: пустой меш"
@@ -147,32 +149,39 @@ def validate_liquid(liquid, target_mm3, info):
     degenerate = [f for f in bm.faces if f.calc_area() <= 1e-15]
     vol_mm3 = bm.calc_volume(signed=True) / (MM ** 3)
 
-    top = max(bm.faces, key=lambda f: f.calc_center_median().z)
-    top_normal_z = abs(top.normal.z)
-    # Все вершины свободной поверхности обязаны лежать на одном уровне —
-    # иначе это не горизонт, а наклонённый торец.
-    zs = sorted(loop.vert.co.z for loop in top.loops)
-    top_thickness_mm = (zs[-1] - zs[0]) / MM
+    zs = [v.co.z for v in bm.verts]
+    z_top = max(zs)
+    # Верхняя кромка (плоская крышка или кромка мениска) горизонтальна.
+    top_zs = [z for z in zs if abs(z - z_top) < 1e-6]
+    top_thickness_mm = (max(top_zs) - min(top_zs)) / MM
     bm.free()
 
     assert not bad, f"Жидкость: {len(bad)} non-manifold рёбер"
     assert not degenerate, f"Жидкость: {len(degenerate)} вырожденных граней"
-    assert top_normal_z > 0.999, \
-        f"Жидкость: верхняя грань не горизонтальна (n.z={top_normal_z:.4f})"
     assert abs(info['volume_mm3'] - vol_mm3) < 0.05, \
         f"Жидкость: объём {vol_mm3:.2f} != посчитанный {info['volume_mm3']:.2f}"
     drift = abs(vol_mm3 - target_mm3) / target_mm3
     assert drift < 2e-4, \
         f"Жидкость: объём {vol_mm3:.2f} мм³ отличается от целевого " \
         f"{target_mm3:.2f} мм³ на {drift * 100:.3f}%"
-    assert top_thickness_mm < 1e-6, \
-        f"Жидкость: верхняя грань не плоская (толщина {top_thickness_mm} мм)"
+    assert top_thickness_mm < 1e-4, \
+        f"Жидкость: верхняя кромка не горизонтальна (толщина {top_thickness_mm} мм)"
+
+    # Верх — либо плоскость на уровне (fallback), либо кромка мениска
+    # на level + подъём у стенки.
+    rise_mm = meniscus_wall_rise_mm()
+    offset_mm = z_top / MM - info['level_mm']
+    assert min(abs(offset_mm), abs(offset_mm - rise_mm)) < 1e-3, \
+        f"Жидкость: верх на {offset_mm:.3f} мм от уровня, " \
+        f"ожидалось 0 или {rise_mm:.3f} мм (мениск)"
 
     print(f"  вершин={info['verts']}  полигонов={info['faces']}  "
           f"non-manifold={len(bad)}")
     print(f"  уровень (мировой z) = {info['level_mm']:.3f} мм, "
           f"объём = {vol_mm3:.2f} мм³ "
           f"(цель {target_mm3:.2f}, ошибка {info['error_mm3']:+.3f})")
+    print(f"  верхняя кромка: z = {z_top / MM:.3f} мм "
+          f"(подъём мениска {offset_mm:.3f} мм)")
     return True
 
 
