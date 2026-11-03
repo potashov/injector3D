@@ -7,16 +7,19 @@ Headless-Blender проект: генерирует 3D-сцену трубки �
 ## Команды
 
 ```bash
+# Локальная сборка Blender 4.3.2 (папка в .gitignore)
+BL=./blender-4.3.2-linux-x64/blender
+
 # Рендер пункта плана (номер -> output/<N>/ и префикс файлов)
-blender --background --python injector3d/create_scene.py -- 4
+$BL --background --python injector3d/create_scene.py -- 4
 
 # Числовая самопроверка жидкости (единственный автотест в репозитории)
-blender --background --python check_liquid.py
+$BL --background --python check_liquid.py
 
 # Диагностика CUDA/GPU
-blender --background --python check_cuda.py
-blender --background --python check_build_cuda.py
-blender --background --python gpu_info.py
+$BL --background --python check_cuda.py
+$BL --background --python check_build_cuda.py
+$BL --background --python gpu_info.py
 ```
 
 Тестового фреймворка, линтера и typecheck нет — проверка = успешный прогон
@@ -25,9 +28,10 @@ blender --background --python gpu_info.py
 ## Версия Blender — проверить первой
 
 Проект написан под **Blender 4.3.2** (имена сокетов `Transmission Weight`,
-AgX и т.п.). В текущем окружении `/usr/bin/blender` — **3.4.1**, на котором
-`materials.py` упадёт. Перед запуском сверяйте `blender --version` и
-используйте сборку 4.3.2, если она доступна.
+AgX и т.п.). Локальная сборка установлена в
+`./blender-4.3.2-linux-x64/blender` (папка в `.gitignore`), используйте её
+для всех запусков. Системный `/usr/bin/blender` — **3.4.1**, на нём
+`materials.py` упадёт. Перед запуском сверяйте `$BL --version`.
 
 ## Архитектура
 
@@ -84,10 +88,8 @@ AgX и т.п.). В текущем окружении `/usr/bin/blender` — **3.
   `check_liquid.py`, затем перерендерить затронутые `output/<N>/`.
 - Не менять геометрию/материалы «на ходу» без повторного рендера: PNG в
   `output/` должны соответствовать текущему коду.
-- Текущий долг: после перехода на ⌀19×92 мм и включения мениска
-  `output/1`, `output/2`, `output/4` ещё не перерендерены; `output/3`
-  отсутствует. Это отмечено в `TODO_meniscus_drops.md`.
-- Пункт 3: мениск реализован для вертикали и наклона, отчёт —
-  `reports/step3.md`; остались контрольные рендеры `output/3/`. Пункт 8
-  (капли) отложен. Перед правкой мениска прочитайте
+- Пункт 3 завершён: мениск работает для вертикали и наклона, отчёт —
+  `reports/step3.md`, контрольные рендеры — `output/3/`. `output/1`,
+  `output/2`, `output/4` пересняты под ⌀19×92 мм и мениск. Пункт 8
+  (капли) отложен; перед правкой мениска прочитайте
   `TODO_meniscus_drops.md`.
