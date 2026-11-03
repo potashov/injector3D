@@ -2,6 +2,24 @@
 
 ## [Не выпущено]
 
+### Изменено — переход на GPU-рендер
+- Cycles рендерит на **2× Quadro P1000 (CUDA 12.4, драйвер 550.163.01)**
+  вместо CPU: кадр 1024×1280 @ 128 сэмплов занимает 3–12 сек против
+  14–25 сек
+- `scene.py`: настройка устройств через `preferences.addons['cycles']
+  .preferences` (`refresh_devices` → `compute_device_type='CUDA'` →
+  включение только дискретных GPU); список вендоров вынесен в
+  `config.GPU_DEVICE_FILTER`
+- Fallback: если CUDA-устройств нет, `cycles.device` автоматически
+  становится `'CPU'` — иначе Cycles не находит ни одного устройства
+  и рендер падает
+- `render.use_persistent_data = True` — данные сцены переиспользуются
+  между кадрами серии из 5 ракурсов
+
+### Уточнено
+- AgX и look `AgX - Medium High Contrast` применяются корректно;
+  недоступен только OpenImageDenoise (запись 1.0.0 была неточной)
+
 ### Добавлено — пункт 4: материалы
 - `injector3d/materials.py`
   - `create_material_plastic()` — Principled BSDF, Transmission 1.0,

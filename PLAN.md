@@ -14,13 +14,14 @@
 - Материал: прозрачный пластик
 
 ## Рендер
-- Движок: Cycles (CPU, GPU нет)
+- Движок: Cycles (GPU: 2× Quadro P1000, CUDA)
 - Эффекты: блики, прозрачность, каустики, поверхностное натяжение, мениск, капли
 
 ## Среда
 - Blender 4.3.2
 - Debian 13 (trixie)
-- Cycles CPU (CUDA недоступен, OpenImageDenoise недоступен в headless)
+- Cycles GPU: 2× Quadro P1000 (Pascal), CUDA 12.4, драйвер 550.163.01
+- OpenImageDenoise недоступен в этой сборке — денуазинг отключён
 
 ## Этапы
 
@@ -84,6 +85,10 @@ reports/              # Отчёты
 ```
 
 ## Известные ограничения
-- Headless Blender 4.3 на Debian 13: OpenImageDenoise недоступен
-- `prefs.cycles` недоступен в headless-режиме
-- `bpy.types.MeshEdge.link_faces` недоступен в 4.3 (работает только через bmesh)
+- OpenImageDenoise недоступен в сборке Debian — денуазинг автоматически
+  отключается, иначе `bpy.ops.render.render()` падает с «Failed to denoise»
+- Настройки Cycles-устройств доступны только через
+  `preferences.addons['cycles'].preferences`, а не `preferences.cycles`
+- `bpy.types.MeshEdge.link_faces` недоступен в 4.3 — manifold проверяется
+  через bmesh
+- AgX и look `AgX - Medium High Contrast` применяются корректно

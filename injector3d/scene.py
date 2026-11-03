@@ -21,6 +21,7 @@ from .config import (
     DENOISER,
     VIEW_TRANSFORM,
     VIEW_LOOK,
+    GPU_DEVICE_FILTER,
     LIGHTS,
     WORLD_COLOR,
     WORLD_STRENGTH,
@@ -40,6 +41,31 @@ def _safe_set(owner, attr, value):
         print(f"    ! {attr}={value!r} недоступен — пропущено")
 
 
+def setup_render_devices():
+    """Включает CUDA-устройства Cycles. Возвращает их количество.
+
+    У Blender 4.3 нет `preferences.cycles`, доступ к настройкам Cycles
+    идёт через словарь аддонов. get_devices_for_type('CUDA') возвращает
+    и CPU-устройство Cycles, и iGPU — их отключаем, чтобы в рендере
+    участвовали только дискретные карты.
+    """
+    prefs = bpy.context.preferences.addons['cycles'].preferences
+    prefs.refresh_devices()
+    prefs.compute_device_type = 'CUDA'
+
+    gpus = 0
+    for device in prefs.get_devices_for_type('CUDA'):
+        if any(vendor in device.name for vendor in GPU_DEVICE_FILTER):
+            device.use = True
+            gpus += 1
+            print(f"    Включён GPU: {device.name}")
+        else:
+            device.use = False
+    if not gpus:
+        print("    ! CUDA-устройства не найдены — рендер на CPU")
+    return gpus
+
+
 def setup_scene():
     """Создаёт чистую сцену, настраивает Cycles, камеру, свет, фон."""
     bpy.ops.wm.read_factory_settings(use_empty=True)
@@ -50,7 +76,9 @@ def setup_scene():
     # ---- Cycles ----
     sc = bpy.context.scene
     sc.render.engine = 'CYCLES'
-    sc.cycles.device = 'CPU'
+    # Без активных GPU-устройств оставляем CPU: с device='GPU' и пустым
+    # списком устройств Cycles отвечает «no compatible GPU device found».
+    sc.cycles.device = 'GPU' if setup_render_devices() else 'CPU'
     sc.cycles.samples = RENDER_SAMPLES
     sc.cycles.preview_samples = 32
     sc.cycles.caustics_reflective = True
@@ -66,6 +94,9 @@ def setup_scene():
 
     # Все доступные CPU-ядра (режим AUTO)
     sc.render.threads_mode = 'AUTO'
+    # BVH и текстуры переиспользуются между кадрами серии из 5 ракурсов —
+    # на GPU это снимает перестройку сцены перед каждым кадром.
+    sc.render.use_persistent_data = True
 
     # Денойзер и tone-mapping (могут быть недоступны в headless-сборке).
     # Если OIDN недоступен, денуазинг обязательно выключаем: иначе

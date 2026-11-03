@@ -68,10 +68,11 @@ LIGHTS = (
 WORLD_COLOR = (0.16, 0.17, 0.19, 1.0)
 WORLD_STRENGTH = 0.35
 
-# --- Рендер (Cycles, CPU: CUDA 12 в Blender 4.3 не поддерживает Pascal/CC6.1) ---
+# --- Рендер (Cycles, GPU: 2× Quadro P1000 / CUDA 12.4, драйвер 550.163.01) ---
 RENDER_RESOLUTION = (1024, 1280)
 RENDER_SAMPLES = 128
-RENDER_TIME_LIMIT_S = 75   # страховка от зависания пакетного рендера на CPU
+RENDER_TIME_LIMIT_S = 75   # страховка от зависания пакетного рендера
+GPU_DEVICE_FILTER = ("Quadro", "GeForce", "Tesla")  # NVIDIA-устройства CUDA
 
 # Денойзер и tone-mapping применяются «если доступны»: в headless-сборке
 # Blender 4.3 из Debian список значений OpenImageDenoise пуст.
@@ -88,7 +89,7 @@ MAX_BOUNCES = {
     "diffuse": 4,
     "volume": 0,
 }
-CLAMP_INDIRECT = 10.0   # гасит «снежинки» каустик на CPU
+CLAMP_INDIRECT = 10.0   # гасит «снежинки» каустик
 
 # Выход — рядом с пакетом, чтобы не зависеть от текущей папки при запуске
 # `blender --background --python ...`.
