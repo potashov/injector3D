@@ -120,8 +120,9 @@ def solve_meniscus(R=INNER_RADIUS, nsteps=MENISCUS_STEPS):
     -------
     dict с полями:
         h0 — подъём у стенки (мм),
-        r, z, zp — массивы координат,
+        r, z, F — массивы координат,
         delta_V_mm3 — объём мениска (должен совпадать с ANALYTIC_DELTA_V_MM3),
+        d_net — объём юбки относительно плоскости ζ(0),
     """
     # Бисекция ζ(0) по краевому условию ζ′(R) = ctg(θ).
     #
@@ -171,6 +172,15 @@ def solve_meniscus(R=INNER_RADIUS, nsteps=MENISCUS_STEPS):
                    * (rs[i] - rs[i - 1])
     delta_v *= 2 * math.pi
 
+    # d_net — объём юбки относительно плоскости ζ(0):
+    # V = πR²(H−ζ₀) + d_net при заполнении до уровня H на оси.
+    z0 = zs[0]
+    d_net = 0.0
+    for i in range(1, len(rs)):
+        d_net += 0.5 * (rs[i] * (zs[i] - z0) + rs[i - 1] * (zs[i - 1] - z0)) \
+                 * (rs[i] - rs[i - 1])
+    d_net *= 2 * math.pi
+
     return {
         'h0': h0,
         'r': rs,
@@ -178,4 +188,5 @@ def solve_meniscus(R=INNER_RADIUS, nsteps=MENISCUS_STEPS):
         'F': Fs,
         'delta_V_mm3': delta_v,
         'delta_V_analytic': ANALYTIC_DELTA_V_MM3,
+        'd_net': d_net,
     }

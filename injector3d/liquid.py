@@ -134,14 +134,14 @@ def _build_meniscus_bmesh(mw, level_mm, segments):
     if h_level_m <= z0_m + 1e-9:
         return None
 
-    r = (INNER_RADIUS - CLEARANCE) * MM
+    r_mesh = _equal_area_radius(INNER_RADIUS - CLEARANCE) * MM
 
     bm = bmesh.new()
 
-    # 1. Плоский цилиндр в локальных координатах (ось Z вдоль трубки)
+    # 1. Плоский цилиндр в локальных координатах трубки (ось Z вдоль трубки)
     bmesh.ops.create_cone(
         bm, cap_ends=True, cap_tris=False, segments=segments,
-        radius1=r, radius2=r, depth=h_level_m - z0_m,
+        radius1=r_mesh, radius2=r_mesh, depth=h_level_m - z0_m,
     )
     for v in bm.verts:
         v.co.z += z0_m
@@ -153,7 +153,6 @@ def _build_meniscus_bmesh(mw, level_mm, segments):
         bm.free()
         return None
     if h >= max(zs) - 1e-9:
-        # Горизонт выше трубки
         return bm
 
     bmesh.ops.bisect_plane(
@@ -169,7 +168,6 @@ def _build_meniscus_bmesh(mw, level_mm, segments):
     # 3. Заменяем верхнюю крышку мениском
     prof = _meniscus_profile(INNER_RADIUS)
     zeta0 = prof['z'][0]
-    zeta_vals = [prof['z'][i] for i in range(len(prof['r']))]
 
     # Находим вершины верхней кромки
     top_verts = [v for v in bm.verts if abs(v.co.z - h) < 1e-9]
