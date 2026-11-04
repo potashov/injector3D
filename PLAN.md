@@ -87,6 +87,14 @@
 - 0–2 сферических капли на внутренней стенке трубки
 - Детерминированы seed
 
+### ✅ Референс 06120 — камера и дисторсия
+- `config.REFERENCE_CAMERA`: OV5693 5MP 1/4″, 1.3 мм, сенсор
+  3.6288×2.7216 мм, дистанция 46 мм, `Distortion=+0.66`, roll +1.5°
+- `render_reference.py` — кадр 1200×1200 на белом фоне, сдвиг вправо
+  на 105 px; `postprocess_reference.py` — белый фон, масштаб и сдвиг
+- контрольный кадр: `output/06120/06120_match_20261104_194054.png`;
+  отчёт: `reports/reference_camera_06120.md`
+
 ## Архитектура
 
 ```
@@ -100,7 +108,10 @@ injector3d/
 ├── materials.py      # Материалы (пластик, жидкость)
 ├── render.py         # Рендер
 └── create_scene.py   # Entry-point
+render_reference.py   # Кадр под референс 06120
+postprocess_reference.py  # Белый фон, масштаб, сдвиг
 output/               # Рендеры
+output/06120/         # Кадры под референс 06120
 reports/              # Отчёты
 ```
 

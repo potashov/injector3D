@@ -72,6 +72,24 @@ CAMERA_LENS = 85.0
 CAMERA_SENSOR = 36.0
 CAMERA_FSTOP = 5.6
 
+# --- Камера-референс 06120 (OV5693, 1.3 мм, barrel) ---
+# Кадр 1200×1200 на белом фоне, трубка сдвинута вправо, верх обрезан.
+REFERENCE_RESOLUTION = (1200, 1200)
+REFERENCE_CAMERA = {
+    'lens_mm': 1.3,
+    'sensor_width_mm': 3.6288,
+    'sensor_height_mm': 2.7216,
+    'distance_mm': 46.0,
+    'target_z_mm': 35.0,
+    'camera_z_mm': 40.0,
+    'roll_deg': 1.5,
+    'fstop': 2.8,
+    'distortion': 0.66,
+    'shift_x_px': 105,
+    'target_height_px': 1124,
+    'samples': 128,
+}
+
 # Камера на -Y смотрит в +Y (up = +Z), поэтому в кадре +X — вправо:
 #   поворот вокруг мировой X на +угол  -> верх трубки тянется к камере;
 #   поворот вокруг мировой Y на +угол  -> верх трубки тянется вправо.
@@ -124,3 +142,4 @@ CLAMP_INDIRECT = 10.0   # гасит «снежинки» каустик
 # `blender --background --python ...`.
 PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OUTPUT_DIR = os.path.join(PROJECT_DIR, "output")
+REFERENCE_OUTPUT_DIR = os.path.join(OUTPUT_DIR, '06120')

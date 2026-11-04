@@ -13,6 +13,9 @@ BL=./blender-4.3.2-linux-x64/blender
 # Рендер пункта плана (номер -> output/<N>/ и префикс файлов)
 $BL --background --python injector3d/create_scene.py -- 4
 
+# Кадр под референс 06120 (1200×1200, белый фон, сдвиг вправо 105 px)
+$BL --background --python render_reference.py
+
 # Числовая самопроверка жидкости (единственный автотест в репозитории)
 $BL --background --python check_liquid.py
 
@@ -54,6 +57,12 @@ AgX и т.п.). Локальная сборка установлена в
   кромки и manifold на краевых случаях; это единственный автотест.
 - `injector3d/render.py` — 5 ракурсов из `config.TILT_VARIANTS`; имена
   `<step>_<ракурс>_<timestamp>.png|.blend`.
+- `render_reference.py` — отдельный кадр 1200×1200 под `06120.png`:
+  `config.REFERENCE_CAMERA`, Lensdist `use_fit=False`, белый фон.
+- `postprocess_reference.py` — системный `python3` (PIL/numpy/scipy):
+  заливает чёрные полосы Lensdist, масштабирует до высоты 1124 px и
+  сдвигает вправо на 105 px.
+- `reports/reference_camera_06120.md` — параметры камеры и метрики.
 - `reports/step*.md` — отчёты по пунктам плана; `PLAN.md`, `CHANGELOG.md` —
   актуальный контекст и известные проблемы.
 
@@ -64,6 +73,8 @@ AgX и т.п.). Локальная сборка установлена в
 - `output/<N>/*.png` **отслеживаются git** как результат работы;
   `.blend`/`.blend1` игнорируются. Не удаляйте чужие рендеры и не считайте
   `output/` временным каталогом.
+- `output/06120/` — отдельный результат под референс; основной
+  `create_scene.py` его не перезаписывает.
 - Один прогон = 5 кадров 1024×1280 @ 128 сэмплов (GPU ~3–12 с/кадр, CPU
   14–25 с/кадр; есть `RENDER_TIME_LIMIT_S = 75`). Полная серия небесплатна.
 
