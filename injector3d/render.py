@@ -1,5 +1,7 @@
 """Рендер трубки под разными углами наклона.
 
+Камера жёстко привязана к трубке, поэтому кадр не зависит от наклона.
+Свет остаётся в мировых координатах, жидкость — тоже (уровень горизонтален).
 Имена файлов уникальны: <step>_<ракурс>_<timestamp>.png/.blend
 """
 
@@ -19,6 +21,7 @@ from .config import (
     SCENE_POSTPROCESS,
     TILT_VARIANTS,
 )
+from .scene import attach_camera_to_tube
 
 
 def _configure_compositor(scene):
@@ -65,6 +68,8 @@ def render_tube(tube, camera, step='1', on_tilt=None):
     ts = time.strftime('%Y%m%d_%H%M%S')
     base = os.path.join(OUTPUT_DIR, step)
     os.makedirs(base, exist_ok=True)
+
+    attach_camera_to_tube(camera, tube)
 
     scene = bpy.context.scene
     scene.use_nodes = True

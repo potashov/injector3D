@@ -57,10 +57,13 @@ AgX и т.п.). Локальная сборка установлена в
   кромки и manifold на краевых случаях; это единственный автотест.
 - `injector3d/scene.py` — камера из `config.SCENE_CAMERA` (та же, что
   `REFERENCE_CAMERA`): ручной track + roll +1.5°, 1.3 мм, f/2.8.
-- `injector3d/render.py` — 5 ракурсов из `config.TILT_VARIANTS`; рендер
-  1200×1200 в RGBA с `film_transparent=True`, Lensdist `use_fit=False`,
-  затем белый фон через `postprocess_reference.py`; имена
-  `<step>_<ракурс>_<timestamp>.png|.blend`.
+  `attach_camera_to_tube()` жёстко родит камеру к трубке; свет остаётся
+  в мировых координатах.
+- `injector3d/render.py` — 5 ракурсов из `config.TILT_VARIANTS`; камера
+  привязана к трубке, поэтому кадр не зависит от наклона, а наклоняется
+  только уровень жидкости. Рендер 1200×1200 в RGBA с
+  `film_transparent=True`, Lensdist `use_fit=False`, затем белый фон через
+  `postprocess_reference.py`; имена `<step>_<ракурс>_<timestamp>.png|.blend`.
 - `render_reference.py` — отдельный кадр под `06120.png`:
   `config.REFERENCE_CAMERA`, дополнительно сдвиг +105 px и высота 1124 px.
 - `postprocess_reference.py` — системный `python3` (PIL/numpy/scipy):

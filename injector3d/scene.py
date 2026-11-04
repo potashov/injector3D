@@ -136,6 +136,20 @@ def setup_scene():
     return cam
 
 
+def attach_camera_to_tube(camera, tube):
+    """Жёстко привязывает камеру к трубке.
+
+    Камера сохраняет положение и ориентацию относительно трубки, поэтому
+    при наклоне трубка в кадре не меняется. Свет остаётся в мировых
+    координатах; жидкость тоже строится в мире с горизонтальным уровнем,
+    поэтому её наклон относительно трубки виден.
+    """
+    tube.rotation_euler = (0.0, 0.0, 0.0)
+    bpy.context.view_layer.update()
+    camera.parent = tube
+    camera.matrix_parent_inverse = tube.matrix_world.inverted()
+
+
 def _setup_lighting():
     """Студийное освещение: 3 площади из config.LIGHTS.
 

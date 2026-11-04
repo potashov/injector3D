@@ -95,8 +95,11 @@
 - контрольный кадр: `output/06120/06120_match_20261104_194054.png`;
   отчёт: `reports/reference_camera_06120.md`
 - параметры перенесены в основную сцену: `config.SCENE_CAMERA`,
-  `RENDER_RESOLUTION = 1200×1200`, `config.SCENE_POSTPROCESS`;
-  серия `output/4/20261104_195833` перерендерена
+  `RENDER_RESOLUTION = 1200×1200`, `config.SCENE_POSTPROCESS`
+- камера жёстко привязана к трубке (`scene.attach_camera_to_tube`):
+  при наклонах кадр не меняется, наклоняется только уровень жидкости;
+  свет остаётся в мировых координатах
+- серия `output/4/20261104_211311` перерендерена
 
 ## Архитектура
 
