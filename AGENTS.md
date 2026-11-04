@@ -55,13 +55,17 @@ AgX и т.п.). Локальная сборка установлена в
   кэшируется в `liquid._MENISCUS_CACHE`.
 - `check_liquid.py` проверяет V(θ)=const, объём с мениском, горизонтальность
   кромки и manifold на краевых случаях; это единственный автотест.
-- `injector3d/render.py` — 5 ракурсов из `config.TILT_VARIANTS`; имена
+- `injector3d/scene.py` — камера из `config.SCENE_CAMERA` (та же, что
+  `REFERENCE_CAMERA`): ручной track + roll +1.5°, 1.3 мм, f/2.8.
+- `injector3d/render.py` — 5 ракурсов из `config.TILT_VARIANTS`; рендер
+  1200×1200 в RGBA с `film_transparent=True`, Lensdist `use_fit=False`,
+  затем белый фон через `postprocess_reference.py`; имена
   `<step>_<ракурс>_<timestamp>.png|.blend`.
-- `render_reference.py` — отдельный кадр 1200×1200 под `06120.png`:
-  `config.REFERENCE_CAMERA`, Lensdist `use_fit=False`, белый фон.
+- `render_reference.py` — отдельный кадр под `06120.png`:
+  `config.REFERENCE_CAMERA`, дополнительно сдвиг +105 px и высота 1124 px.
 - `postprocess_reference.py` — системный `python3` (PIL/numpy/scipy):
-  заливает чёрные полосы Lensdist, масштабирует до высоты 1124 px и
-  сдвигает вправо на 105 px.
+  заливает чёрные полосы Lensdist; `--height 0` отключает масштаб, `--shift`
+  задаёт сдвиг. Для основной серии — `--shift 0 --height 0`.
 - `reports/reference_camera_06120.md` — параметры камеры и метрики.
 - `reports/step*.md` — отчёты по пунктам плана; `PLAN.md`, `CHANGELOG.md` —
   актуальный контекст и известные проблемы.
@@ -75,8 +79,13 @@ AgX и т.п.). Локальная сборка установлена в
   `output/` временным каталогом.
 - `output/06120/` — отдельный результат под референс; основной
   `create_scene.py` его не перезаписывает.
-- Один прогон = 5 кадров 1024×1280 @ 128 сэмплов (GPU ~3–12 с/кадр, CPU
-  14–25 с/кадр; есть `RENDER_TIME_LIMIT_S = 75`). Полная серия небесплатна.
+- `output/1–3/` — исторические серии студийной камеры 85 мм; текущая
+  камера референса применяется при новом прогоне соответствующего пункта.
+- Один прогон = 5 кадров 1200×1200 @ 128 сэмплов (GPU ~30 с/кадр; есть
+  `RENDER_TIME_LIMIT_S = 75`). Полная серия небесплатна.
+- `config.SCENE_POSTPROCESS` для основной серии: `shift_x_px=0`,
+  `target_height_px=0`. Фиксированный сдвиг +105 px обрезает `right30`,
+  а вертикальная растяжка привязана к одиночной вертикальной трубке.
 
 ## Особенности Blender 4.3 / окружения
 

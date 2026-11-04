@@ -2,6 +2,21 @@
 
 ## [Не выпущено]
 
+### Изменено — основная сцена на камере референса 06120
+- `config.SCENE_CAMERA` ссылается на `REFERENCE_CAMERA`; основная серия
+  из 5 ракурсов теперь рендерится той же камерой: 1.3 мм, 46 мм до оси,
+  f/2.8, roll +1.5°, `Distortion=+0.66`
+- `scene.py`: камера ставится вручную (track + roll), добавлены
+  `sensor_height`, `sensor_fit='HORIZONTAL'` и `clip_start=0.0001`
+- `render.py`: 1200×1200, `film_transparent=True`, Lensdist
+  `use_fit=False`, затем белый фон через `postprocess_reference.py`
+- `config.SCENE_POSTPROCESS`: для 5 наклонов `shift_x_px=0`,
+  `target_height_px=0` — сдвиг +105 px обрезает `right30`, а растяжка
+  привязана к одиночной вертикальной трубке
+- `postprocess_reference.py`: `--height 0` отключает вертикальный масштаб
+- серия `output/4/20261104_195833` перерендерена; `output/1–3` остаются
+  историческими кадрами прежней студийной камеры
+
 ### Добавлено — камера-референс 06120
 - `config.REFERENCE_CAMERA`: OV5693 5MP 1/4″, пиксель 1.4 µm,
   объектив 1.3 мм, sensor 3.6288×2.7216 мм, дистанция 46 мм,

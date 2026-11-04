@@ -94,6 +94,9 @@
   на 105 px; `postprocess_reference.py` — белый фон, масштаб и сдвиг
 - контрольный кадр: `output/06120/06120_match_20261104_194054.png`;
   отчёт: `reports/reference_camera_06120.md`
+- параметры перенесены в основную сцену: `config.SCENE_CAMERA`,
+  `RENDER_RESOLUTION = 1200×1200`, `config.SCENE_POSTPROCESS`;
+  серия `output/4/20261104_195833` перерендерена
 
 ## Архитектура
 
@@ -109,7 +112,7 @@ injector3d/
 ├── render.py         # Рендер
 └── create_scene.py   # Entry-point
 render_reference.py   # Кадр под референс 06120
-postprocess_reference.py  # Белый фон, масштаб, сдвиг
+postprocess_reference.py  # Белый фон, масштаб/сдвиг (опционально)
 output/               # Рендеры
 output/06120/         # Кадры под референс 06120
 reports/              # Отчёты

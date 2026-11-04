@@ -8,12 +8,11 @@ import bpy
 import addon_utils
 import math
 
+from mathutils import Quaternion, Vector
+
 from .config import (
-    CAMERA_TARGET,
-    CAMERA_POSITION,
-    CAMERA_LENS,
-    CAMERA_SENSOR,
-    CAMERA_FSTOP,
+    MM,
+    SCENE_CAMERA,
     MAX_BOUNCES,
     CLAMP_INDIRECT,
     RENDER_SAMPLES,
@@ -107,27 +106,27 @@ def setup_scene():
     _safe_set(sc.view_settings, 'view_transform', VIEW_TRANSFORM)
     _safe_set(sc.view_settings, 'look', VIEW_LOOK)
 
-    # Камера
-    bpy.ops.object.camera_add(location=CAMERA_POSITION)
+    # Камера: та же оптика и ракурс, что у референса 06120
+    p = SCENE_CAMERA
+    target = Vector((0.0, 0.0, p['target_z_mm'] * MM))
+    location = Vector((0.0, -p['distance_mm'] * MM,
+                       p['camera_z_mm'] * MM))
+    bpy.ops.object.camera_add(location=location)
     cam = bpy.context.active_object
     cam.name = 'Camera'
-    cam.data.lens = CAMERA_LENS
-    cam.data.sensor_width = CAMERA_SENSOR
+    cam.data.lens = p['lens_mm']
+    cam.data.sensor_width = p['sensor_width_mm']
+    cam.data.sensor_height = p['sensor_height_mm']
+    cam.data.sensor_fit = 'HORIZONTAL'
+    cam.data.clip_start = 0.0001
     cam.data.dof.use_dof = True
-    cam.data.dof.aperture_fstop = CAMERA_FSTOP
-    cam.data.dof.focus_distance = math.dist(CAMERA_POSITION, CAMERA_TARGET)
+    cam.data.dof.aperture_fstop = p['fstop']
+    cam.data.dof.focus_distance = p['distance_mm'] * MM
 
-    # Цель для камеры (пустой в центре трубки)
-    target = bpy.data.objects.new('CameraTarget', None)
-    target.empty_display_size = 0.01
-    target.location = CAMERA_TARGET
-    bpy.context.collection.objects.link(target)
-
-    # Следит за целью
-    track = cam.constraints.new('TRACK_TO')
-    track.target = target
-    track.track_axis = 'TRACK_NEGATIVE_Z'
-    track.up_axis = 'UP_Y'
+    base = (target - location).to_track_quat('-Z', 'Y')
+    roll = Quaternion((0.0, 0.0, 1.0), math.radians(p['roll_deg']))
+    cam.rotation_mode = 'QUATERNION'
+    cam.rotation_quaternion = base @ roll
 
     _setup_lighting()
     _setup_background()

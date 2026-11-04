@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Постобработка кадра-референса 06120.
+"""Постобработка кадров с дисторсией Lensdist.
 
-Убирает чёрные полосы Lensdist, масштабирует кадр по вертикали до
-целевой высоты трубки и сдвигает её вправо.  Запускается системным
-python3 (нужны PIL, numpy, scipy), а не внутри Blender.
+Убирает чёрные полосы/прозрачные области, при необходимости масштабирует
+кадр по вертикали до целевой высоты трубки и сдвигает его вправо.
+Запускается системным python3 (нужны PIL, numpy, scipy), не внутри Blender.
 """
 
 import argparse
@@ -39,7 +39,8 @@ def main():
     parser.add_argument('raw')
     parser.add_argument('final')
     parser.add_argument('--shift', type=int, default=105)
-    parser.add_argument('--height', type=int, default=1124)
+    parser.add_argument('--height', type=int, default=0,
+                        help='высота видимой трубки; 0 — без масштаба')
     args = parser.parse_args()
 
     image = Image.open(args.raw).convert('RGBA')
@@ -56,9 +57,14 @@ def main():
 
     ys = np.where(tube.any(axis=1))[0]
     raw_h = int(ys.max() - ys.min() + 1)
-    scale = args.height / raw_h
-    new_h = int(round(1200 * scale))
-    stretched = solid.resize((1200, new_h), Image.LANCZOS)
+    if args.height > 0:
+        scale = args.height / raw_h
+        new_h = int(round(1200 * scale))
+        stretched = solid.resize((1200, new_h), Image.LANCZOS)
+    else:
+        scale = 1.0
+        new_h = solid.height
+        stretched = solid
 
     canvas = Image.new('RGB', (1200 + args.shift, 1200), (255, 255, 255))
     canvas.paste(stretched, (args.shift, 0))
