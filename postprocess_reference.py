@@ -60,7 +60,7 @@ def main():
     if args.height > 0:
         scale = args.height / raw_h
         new_h = int(round(1200 * scale))
-        stretched = solid.resize((1200, new_h), Image.LANCZOS)
+        stretched = solid.resize((1200, new_h), Image.Resampling.LANCZOS)
     else:
         scale = 1.0
         new_h = solid.height
