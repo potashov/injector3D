@@ -116,6 +116,7 @@ injector3d/
 └── create_scene.py   # Entry-point
 render_reference.py   # Кадр под референс 06120
 postprocess_reference.py  # Белый фон, масштаб/сдвиг (опционально)
+calib_world.py        # Подбор WORLD_STRENGTH по сетке прогонов
 output/               # Рендеры
 output/06120/         # Кадры под референс 06120
 reports/              # Отчёты
@@ -129,3 +130,6 @@ reports/              # Отчёты
 - `bpy.types.MeshEdge.link_faces` недоступен в 4.3 — manifold проверяется
   через bmesh
 - AgX и look `AgX - Medium High Contrast` применяются корректно
+- Белый мир `WORLD_STRENGTH = 0.30` подобран для точки `upright`;
+  при сильных наклонах контраст «воздух/жидкость» может отличаться.
+  Подбор — `calib_world.py`.
