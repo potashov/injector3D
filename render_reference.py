@@ -2,7 +2,7 @@
 """Рендер кадра, повторяющего референс 06120.
 
 Запуск:
-    ./blender-4.3.2-linux-x64/blender --background --python render_reference.py
+    ./blender-5.2.3-linux-x64/blender --background --python render_reference.py
 
 Результат: output/06120/06120_match_<timestamp>.png
 Кадр 1200×1200, белый фон, трубка сдвинута вправо на 105 px.
@@ -28,6 +28,7 @@ from injector3d.liquid import (
     target_volume_mm3,
 )
 from injector3d.materials import create_material_liquid, create_material_plastic
+from injector3d.render import _configure_compositor
 from injector3d.scene import setup_scene
 from injector3d.tube_geometry import create_tube
 
@@ -57,22 +58,6 @@ def _configure_camera(camera):
     camera.data.dof.focus_distance = p['distance_mm'] * cfg.MM
 
 
-def _configure_compositor(scene):
-    p = cfg.REFERENCE_CAMERA
-    scene.use_nodes = True
-    tree = scene.node_tree
-    tree.nodes.clear()
-
-    layers = tree.nodes.new('CompositorNodeRLayers')
-    lens = tree.nodes.new('CompositorNodeLensdist')
-    lens.use_fit = False
-    lens.inputs['Dispersion'].default_value = 0.0
-    lens.inputs['Distortion'].default_value = p['distortion']
-    composite = tree.nodes.new('CompositorNodeComposite')
-    tree.links.new(layers.outputs['Image'], lens.inputs['Image'])
-    tree.links.new(lens.outputs['Image'], composite.inputs['Image'])
-
-
 def main():
     p = cfg.REFERENCE_CAMERA
     camera = setup_scene()
@@ -84,7 +69,7 @@ def main():
     build_liquid(liquid, tube, target_volume_mm3(cfg.FILL_FRACTION))
 
     _configure_camera(camera)
-    _configure_compositor(bpy.context.scene)
+    _configure_compositor(bpy.context.scene, distortion=p['distortion'])
 
     scene = bpy.context.scene
     scene.render.engine = 'CYCLES'

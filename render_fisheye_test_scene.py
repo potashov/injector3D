@@ -2,6 +2,11 @@ import bpy
 import math
 import datetime
 import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from injector3d.render import _configure_compositor
 
 # 1. Очистка сцены
 bpy.ops.wm.read_factory_settings(use_empty=True)
@@ -70,7 +75,7 @@ bg.inputs[1].default_value = 1.0
 # 6. ГЕНЕРАЦИЯ ПУТЕЙ (ЕДИНОЕ ИМЯ ДЛЯ СЦЕНЫ И РЕНДЕРА)
 # =======================================================
 timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M")
-base_dir = "/home/nikolay/opencv/injector3D/output"
+base_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "output")
 os.makedirs(base_dir, exist_ok=True)
 
 # Базовое имя файла без расширения
@@ -103,25 +108,7 @@ scene.render.filepath = png_filepath
 # =======================================================
 # ВКЛЮЧАЕМ ДИСТОРСИЮ ЧЕРЕЗ COMPOSITOR
 # =======================================================
-scene.use_nodes = True
-tree = scene.node_tree
-tree.nodes.clear()
-
-rl = tree.nodes.new('CompositorNodeRLayers')
-lens = tree.nodes.new('CompositorNodeLensdist')
-comp = tree.nodes.new('CompositorNodeComposite')
-
-# Настройка ноды (без distortion_type)
-lens.use_fit = True            # Обрезает черные углы
-lens.use_jitter = False        # Отключает шум (для чистоты)
-# lens.use_projector = False   # Оставляем False для радиальной (бочка/подушка)
-
-# Устанавливаем степень искажения (положительное значение = бочка)
-lens.inputs['Distortion'].default_value = 5.6  # <-- Параметр К1. Регулируйте здесь (0.1 ... 0.5)
-
-# Соединяем
-tree.links.new(rl.outputs['Image'], lens.inputs['Image'])
-tree.links.new(lens.outputs['Image'], comp.inputs['Image'])
+_configure_compositor(scene, distortion=5.6, fit=True)
 
 # =======================================================
 # 8. СОХРАНЕНИЕ ФАЙЛА СЦЕНЫ

@@ -75,7 +75,7 @@ bg.inputs[1].default_value = 1.0
 
 # 7. Сохранение с временной меткой
 timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M")
-base_dir = "/home/nikolay/opencv/injector3D/output"
+base_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "output")
 os.makedirs(base_dir, exist_ok=True)
 filepath = os.path.join(base_dir, f"fisheye_ov5693_{timestamp}.blend")
 

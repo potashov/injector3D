@@ -54,7 +54,7 @@
 на 105 px и растягивает кадр до высоты 1124 px.
 
 ```bash
-BL=./blender-4.3.2-linux-x64/blender
+BL=./blender-5.2.3-linux-x64/blender
 
 # Основная серия: 5 ракурсов, 1200×1200, белый фон
 $BL --background --python injector3d/create_scene.py -- 4

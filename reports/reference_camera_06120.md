@@ -115,7 +115,7 @@
 ## Воспроизведение
 
 ```bash
-BL=./blender-4.3.2-linux-x64/blender
+BL=./blender-5.2.3-linux-x64/blender
 
 # Полный рендер + постобработка
 $BL --background --python render_reference.py

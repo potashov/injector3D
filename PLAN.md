@@ -18,10 +18,10 @@
 - Эффекты: блики, прозрачность, каустики, поверхностное натяжение, мениск, капли
 
 ## Среда
-- Blender 4.3.2
+- Blender 5.2.3 LTS (совместимо с 4.3.2)
 - Debian 13 (trixie)
 - Cycles GPU: 2× Quadro P1000 (Pascal), CUDA 12.4, драйвер 550.163.01
-- OpenImageDenoise недоступен в этой сборке — денуазинг отключён
+- OpenImageDenoise доступен; денуазинг включается условно
 
 ## Этапы
 
@@ -123,8 +123,8 @@ reports/              # Отчёты
 ```
 
 ## Известные ограничения
-- OpenImageDenoise недоступен в сборке Debian — денуазинг автоматически
-  отключается, иначе `bpy.ops.render.render()` падает с «Failed to denoise»
+- OpenImageDenoise в 5.2.3 доступен; денуазинг всё равно включается
+  условно через `_safe_set`, иначе старые сборки падают с «Failed to denoise»
 - Настройки Cycles-устройств доступны только через
   `preferences.addons['cycles'].preferences`, а не `preferences.cycles`
 - `bpy.types.MeshEdge.link_faces` недоступен в 4.3 — manifold проверяется

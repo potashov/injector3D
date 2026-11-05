@@ -7,8 +7,8 @@ Headless-Blender проект: генерирует 3D-сцену трубки �
 ## Команды
 
 ```bash
-# Локальная сборка Blender 4.3.2 (папка в .gitignore)
-BL=./blender-4.3.2-linux-x64/blender
+# Локальная сборка Blender 5.2.3 LTS (папка в .gitignore)
+BL=./blender-5.2.3-linux-x64/blender
 
 # Рендер пункта плана (номер -> output/<N>/ и префикс файлов)
 $BL --background --python injector3d/create_scene.py -- 4
@@ -30,11 +30,12 @@ $BL --background --python gpu_info.py
 
 ## Версия Blender — проверить первой
 
-Проект написан под **Blender 4.3.2** (имена сокетов `Transmission Weight`,
-AgX и т.п.). Локальная сборка установлена в
-`./blender-4.3.2-linux-x64/blender` (папка в `.gitignore`), используйте её
-для всех запусков. Системный `/usr/bin/blender` — **3.4.1**, на нём
-`materials.py` упадёт. Перед запуском сверяйте `$BL --version`.
+Проект проверен под **Blender 5.2.3 LTS** (имена сокетов
+`Transmission Weight`, AgX и т.п.). Локальная сборка установлена в
+`./blender-5.2.3-linux-x64/blender` (папка в `.gitignore`), используйте её
+для всех запусков. Код сохраняет совместимость с 4.3.2 через ветки API для
+композитора и `sample_clamp_indirect`. Перед запуском сверяйте
+`$BL --version`.
 
 ## Архитектура
 
@@ -91,15 +92,16 @@ AgX и т.п.). Локальная сборка установлена в
   трубке, поэтому во всех 5 наклонах трубка целиком в кадре. Вертикальная
   растяжка отключена — она привязана к одиночной вертикальной трубке.
 
-## Особенности Blender 4.3 / окружения
+## Особенности Blender / окружения
 
 - Настройки Cycles только через
   `bpy.context.preferences.addons['cycles'].preferences`, не `preferences.cycles`.
 - `MeshEdge.link_faces` и `Mesh.bound_box` в 4.3 недоступны — работать через
   `bmesh` (см. `validate_tube`).
-- OpenImageDenoise в headless-сборке Debian отсутствует: денуазинг включается
-  условно через `_safe_set`, иначе рендер падает с «Failed to denoise».
-  AgX и `AgX - Medium High Contrast` при этом работают.
+- В локальной сборке 5.2.3 OpenImageDenoise доступен; денуазинг всё равно
+  включается условно через `_safe_set` — в старых headless-сборках OIDN мог
+  отсутствовать и `use_denoising=True` ронял рендер с «Failed to denoise».
+  AgX и `AgX - Medium High Contrast` работают.
 - CUDA включается для дискретных NVIDIA (`config.GPU_DEVICE_FILTER`); если
   GPU нет — обязателен fallback `cycles.device = 'CPU'`.
 - Верх трубки открыт: boundary-рёбра допустимы только на верхней кромке.

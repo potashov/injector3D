@@ -89,7 +89,10 @@ def setup_scene():
     sc.cycles.glossy_bounces = MAX_BOUNCES['glossy']
     sc.cycles.diffuse_bounces = MAX_BOUNCES['diffuse']
     sc.cycles.volume_bounces = MAX_BOUNCES['volume']
-    sc.cycles.clamp_indirect = CLAMP_INDIRECT
+    if hasattr(sc.cycles, 'sample_clamp_indirect'):
+        sc.cycles.sample_clamp_indirect = CLAMP_INDIRECT
+    else:
+        sc.cycles.clamp_indirect = CLAMP_INDIRECT
 
     # Все доступные CPU-ядра (режим AUTO)
     sc.render.threads_mode = 'AUTO'

@@ -24,17 +24,45 @@ from .config import (
 from .scene import attach_camera_to_tube
 
 
-def _configure_compositor(scene):
-    """Включает barrel-дисторсию без обрезки кадра под неё."""
-    tree = scene.node_tree
-    tree.nodes.clear()
+def _configure_compositor(scene, distortion=None, fit=False):
+    """Включает barrel-дисторсию без обрезки кадра под неё.
 
-    layers = tree.nodes.new('CompositorNodeRLayers')
-    lens = tree.nodes.new('CompositorNodeLensdist')
-    lens.use_fit = False
-    lens.inputs['Dispersion'].default_value = 0.0
-    lens.inputs['Distortion'].default_value = SCENE_CAMERA['distortion']
-    composite = tree.nodes.new('CompositorNodeComposite')
+    В Blender 5.x композитор переехал из `scene.node_tree` в
+    `scene.compositing_node_group`, а `CompositorNodeComposite` заменён на
+    `NodeGroupOutput`. Для 4.3 сохранена ветка со старым API.
+    """
+    if distortion is None:
+        distortion = SCENE_CAMERA['distortion']
+
+    if hasattr(scene, 'compositing_node_group'):
+        tree = bpy.data.node_groups.new(
+            'injector3d_compositor', 'CompositorNodeTree')
+        tree.interface.new_socket(
+            name='Image', in_out='OUTPUT', socket_type='NodeSocketColor')
+        scene.compositing_node_group = tree
+        scene.render.use_compositing = True
+
+        layers = tree.nodes.new('CompositorNodeRLayers')
+        lens = tree.nodes.new('CompositorNodeLensdist')
+        lens.inputs['Fit'].default_value = fit
+        lens.inputs['Jitter'].default_value = False
+        lens.inputs['Dispersion'].default_value = 0.0
+        lens.inputs['Distortion'].default_value = distortion
+        composite = tree.nodes.new('NodeGroupOutput')
+    else:
+        scene.use_nodes = True
+        tree = scene.node_tree
+        tree.nodes.clear()
+
+        layers = tree.nodes.new('CompositorNodeRLayers')
+        lens = tree.nodes.new('CompositorNodeLensdist')
+        lens.use_fit = fit
+        if hasattr(lens, 'use_jitter'):
+            lens.use_jitter = False
+        lens.inputs['Dispersion'].default_value = 0.0
+        lens.inputs['Distortion'].default_value = distortion
+        composite = tree.nodes.new('CompositorNodeComposite')
+
     tree.links.new(layers.outputs['Image'], lens.inputs['Image'])
     tree.links.new(lens.outputs['Image'], composite.inputs['Image'])
 
@@ -72,7 +100,6 @@ def render_tube(tube, camera, step='1', on_tilt=None):
     attach_camera_to_tube(camera, tube)
 
     scene = bpy.context.scene
-    scene.use_nodes = True
     _configure_compositor(scene)
     scene.render.resolution_x = RENDER_RESOLUTION[0]
     scene.render.resolution_y = RENDER_RESOLUTION[1]

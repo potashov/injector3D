@@ -25,7 +25,7 @@
 - Рендер на GPU (CUDA) с авто-фоллбэком на CPU.
 
 **Технологический стек:**
-- Blender 4.3.2 (локальная headless-сборка в `blender-4.3.2-linux-x64/`)
+- Blender 5.2.3 LTS (локальная headless-сборка в `blender-5.2.3-linux-x64/`)
 - Cycles (GPU/CUDA или CPU)
 - Python-модули `injector3d/` (bpy, bmesh, mathutils)
 - Постобработка: `python3` + PIL/numpy/scipy
@@ -37,12 +37,11 @@
 ### Blender (указатель)
 
 ```bash
-BL=./blender-4.3.2-linux-x64/blender
+BL=./blender-5.2.3-linux-x64/blender
 ```
 
-> **Важно:** системный `/usr/bin/blender` — это версия 3.4.1, на ней
-> `materials.py` упадёт из-за различий в именах сокетов. Всегда
-> используйте локальную сборку 4.3.2.
+> **Важно:** используйте локальную сборку 5.2.3 из корня проекта. Код
+> сохраняет совместимость с 4.3.2 через ветки API композитора.
 
 ### Основные команды
 
@@ -135,8 +134,8 @@ gpu_info.py              # Список устройств рендера и п�
 - Разрешение: 1200×1200, RGBA, `film_transparent=True`.
 - Cycles: 128 сэмплов, `time_limit=75с`, каустики включены.
 - 5 ракурсов: `upright`, `left30`, `away30`, `right30`, `toward30`.
-- Денуазинг: OpenImageDenoise недоступен в headless-сборке Debian —
-  включается условно через `_safe_set`.
+- Денуазинг: OpenImageDenoise в 5.2.3 доступен, но включается условно
+  через `_safe_set` для совместимости со старыми headless-сборками.
 - AgX + `AgX - Medium High Contrast` применяются корректно.
 - Жидкость: оттенок по замеру RGB 73,73,58 задаётся как *тон*
   (B/R = 58/73), а не как абсолютный цвет — иначе жидкость пропустит
@@ -181,15 +180,15 @@ gpu_info.py              # Список устройств рендера и п�
 
 ---
 
-## Особенности Blender 4.3 / окружения
+## Особенности Blender / окружения
 
 1. **Настройки Cycles** — только через
    `bpy.context.preferences.addons['cycles'].preferences`, не
    `preferences.cycles`.
 2. **MeshEdge.link_faces** и **Mesh.bound_box** в 4.3 недоступны —
    работать через `bmesh`.
-3. **OpenImageDenoise** в headless-сборке Debian отсутствует — денуазинг
-   включается условно, иначе рендер падает.
+3. **OpenImageDenoise** в 5.2.3 доступен, но денуазинг включается
+   условно через `_safe_set` — в старых сборках OIDN мог отсутствовать.
 4. **CUDA** включается для дискретных NVIDIA
    (`config.GPU_DEVICE_FILTER`); если GPU нет — фоллбэк на CPU.
 5. **Верх трубки открыт** — boundary-рёбра допустимы только на

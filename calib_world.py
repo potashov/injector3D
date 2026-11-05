@@ -10,7 +10,7 @@ import os
 import shutil
 import sys
 
-sys.path.insert(0, '/home/debian/projects/injector3D')
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import bpy
 
@@ -51,7 +51,6 @@ for s in STRENGTHS:
     validate_liquid(liquid, target_mm3, info)
 
     scene = bpy.context.scene
-    scene.use_nodes = True
     _configure_compositor(scene)
     scene.render.resolution_x, scene.render.resolution_y = cfg.RENDER_RESOLUTION
     scene.render.resolution_percentage = 100
