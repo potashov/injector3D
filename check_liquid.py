@@ -133,6 +133,66 @@ def main():
     assert spilled and v_rim < v_max, \
         "наклон 30° не должен позволять заполнить трубку целиком"
 
+    # 6. Fast-путь: compare fast=True vs fast=False (пункт 4.5)
+    print("\n6. Fast-путь (шаблон мениска): fast=True vs fast=False")
+    from injector3d.liquid import fast_volume_at_level, _MENISCUS_TEMPLATE_CACHE
+    _MENISCUS_TEMPLATE_CACHE.clear()
+    target = target_volume_mm3(0.5)
+    for tilt in (0.0, 10.0, 20.0, 30.0):
+        mw = matrix_for(tilt_deg_y=tilt)
+        # Exact
+        lev_exact, vol_exact, sp_exact = solve_level_for_volume(
+            mw, target, fast=False)
+        # Fast
+        lev_fast, vol_fast, sp_fast = solve_level_for_volume(
+            mw, target, fast=True)
+        lev_diff = abs(lev_exact - lev_fast)
+        vol_diff = abs(vol_exact - vol_fast)
+        good = lev_diff < 0.05 and vol_diff < 0.1
+        ok &= good
+        print(f"  θ={tilt:4.1f}° exact={vol_exact:9.2f} fast={vol_fast:9.2f} "
+              f"ΔV={vol_diff:.3f} Δh={lev_diff:.4f} "
+              f"{'OK' if good else 'FAIL'}")
+
+    # 7. Шаблон: ΔV_under постоянен при разном уровне
+    print("\n7. Шаблон мениска: ΔV_under постоянен")
+    mw = matrix_for(tilt_deg_y=30.0)
+    from injector3d.liquid import _meniscus_template, _build_flat_bmesh
+    from injector3d.config import MENISCUS_RINGS
+    _MENISCUS_TEMPLATE_CACHE.clear()
+    template = _meniscus_template(mw, REVOLVE_SEGMENTS, MENISCUS_RINGS)
+    if template is not None:
+        delta_under = template['delta_under']
+        rise = template['rise']
+        print(f"  ΔV_under = {delta_under:.2f} мм³, подъём у стенки = {rise:.3f} мм")
+        # Проверяем на двух уровнях
+        for frac in (0.3, 0.7):
+            bm = _build_flat_bmesh(mw,
+                                   solve_level_for_volume(
+                                       mw, target_volume_mm3(frac),
+                                       fast=False)[0] + rise,
+                                   REVOLVE_SEGMENTS)
+            if bm is not None:
+                v_flat = bm.calc_volume(signed=True) / (MM ** 3)
+                bm.free()
+                v_men = v_flat - delta_under
+                bm_exact = _liquid_bmesh(mw,
+                                         solve_level_for_volume(
+                                             mw, target_volume_mm3(frac),
+                                             fast=False)[0],
+                                         REVOLVE_SEGMENTS)
+                if bm_exact is not None:
+                    v_exact = bm_exact.calc_volume(signed=True) / (MM ** 3)
+                    bm_exact.free()
+                    diff = abs(v_men - v_exact)
+                    good = diff < 0.5
+                    ok &= good
+                    print(f"  {frac*100:.0f}%: V_flat-Δ={v_men:.2f} "
+                          f"V_exact={v_exact:.2f} Δ={diff:.3f} "
+                          f"{'OK' if good else 'FAIL'}")
+    else:
+        print(f"  Шаблон не построен (θ=30°) — возможно, мениск вне эллипса")
+
     print("\n" + ("ВСЕ ПРОВЕРКИ ПРОЙДЕНЫ" if ok else "ЕСТЬ НЕСОВПАДЕНИЯ"))
     return 0 if ok else 1
 

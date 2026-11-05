@@ -107,6 +107,34 @@ TILT_VARIANTS = (
     ("toward30",   (TILT_DEG, 0.0, 0.0)),     # наклонена в сторону камеры
 )
 
+# --- Пункт 4.5: серия N+1 по окружности ---
+# N — число наклонных положений; всего кадров N+1 (вертикаль + N).
+# Порядок по умолчанию совпадает с примером: -YZ, -XZ, +YZ, +XZ при N=4,
+# то есть старт 270° и шаг -360°/N. Угол θ фиксирован для всей серии.
+TILT_AZIMUTH_COUNT = 4
+TILT_ANGLE_DEG = 10.0
+TILT_AZIMUTH_START_DEG = 270.0
+
+
+def tilt_ring_variants(n=None, angle=None):
+    """N+1 ракурсов: вертикаль + N азимутов при фиксированном угле.
+
+    Возвращает кортеж `(имя, азимут_град | None)`. У вертикали азимут
+    `None`; у наклонных кадров имя `azNNN` (азимут по модулю 360°).
+    """
+    n = TILT_AZIMUTH_COUNT if n is None else int(n)
+    if n < 1:
+        raise ValueError("TILT_AZIMUTH_COUNT должен быть >= 1")
+    if angle is not None and not (0.0 < float(angle) < 90.0):
+        raise ValueError("угол наклона должен быть в диапазоне (0, 90)")
+
+    step = -360.0 / n
+    variants = [("upright", None)]
+    for k in range(n):
+        phi = (TILT_AZIMUTH_START_DEG + k * step) % 360.0
+        variants.append((f"az{int(round(phi)):03d}", phi))
+    return tuple(variants)
+
 # --- Освещение ---
 # Объект ~10 см, камера в 46 мм от оси: площади 2000–5000 Вт изначального
 # каркаса давали гарантированный пересвет. Порядки подобраны под

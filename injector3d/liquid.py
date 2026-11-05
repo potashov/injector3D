@@ -62,6 +62,12 @@ def _equal_area_radius(r_mm, segments=REVOLVE_SEGMENTS):
 # --- Кэш решения мениска ---
 _MENISCUS_CACHE = {}
 
+# Кэш шаблона менисковой крышки: для заданной ориентации трубки форма
+# горизонтального сечения не зависит от уровня (пока срез идёт по стенке).
+# Шаблон хранит постоянную объёмную поправку и позволяет искать уровень
+# по дешёвому плоскому телу, не пересобирая мениск на каждой итерации.
+_MENISCUS_TEMPLATE_CACHE = {}
+
 
 def _meniscus_profile(R_mm):
     """Кэшированное решение Юнга-Лапласа: dict с r, z, delta_V_mm3."""
@@ -276,14 +282,112 @@ def bottom_level_min_mm(mw):
     return (mw[2][3] + mw[2][2] * z0_m - r_liq_m * slope) / MM
 
 
+def _meniscus_valid(mw, level_mm):
+    """Полный эллиптический срез: кромка не у дна и не у перелива."""
+    contact_m = (level_mm + meniscus_wall_rise_mm()) * MM
+    z0_m = (BOTTOM_THICKNESS + CLEARANCE) * MM
+    r_liq_m = (INNER_RADIUS - CLEARANCE) * MM
+    slope = math.hypot(mw[2][0], mw[2][1])
+    max_bottom_m = mw[2][3] + mw[2][2] * z0_m + r_liq_m * slope
+    return (contact_m > max_bottom_m + 1e-9
+            and contact_m < spill_level_mm(mw) * MM - 1e-9)
+
+
+def _template_key(mw, segments, rings):
+    """Ключ шаблона: ориентация + дискретизация."""
+    return (
+        tuple(round(float(mw[i][j]), 9) for i in range(4) for j in range(4)),
+        int(segments),
+        int(rings),
+    )
+
+
+def _meniscus_template(mw, segments, rings):
+    """Шаблон мениска для данной ориентации трубки.
+
+    Форма эллиптической кромки не зависит от уровня, пока срез идёт по
+    цилиндрической стенке. Поэтому `ΔV_under` (объём между плоскостью
+    кромки и мениском) постоянен, а бисекцию уровня можно вести по
+    дешёвому плоскому телу.
+
+    Returns
+    -------
+    dict | None
+        {'rise', 'delta_under', 'level0'} или None, если мениск на этой
+        ориентации не помещается (у дна/перелива).
+    """
+    key = _template_key(mw, segments, rings)
+    if key in _MENISCUS_TEMPLATE_CACHE:
+        return _MENISCUS_TEMPLATE_CACHE[key]
+
+    lo = bottom_level_min_mm(mw)
+    hi = spill_level_mm(mw)
+    level = 0.5 * (lo + hi)
+    if not _meniscus_valid(mw, level):
+        level = hi - meniscus_wall_rise_mm() - 1e-3
+    if not _meniscus_valid(mw, level):
+        _MENISCUS_TEMPLATE_CACHE[key] = None
+        return None
+
+    rise = meniscus_wall_rise_mm()
+    contact = level + rise
+
+    bm_flat = _build_flat_bmesh(mw, contact, segments)
+    if bm_flat is None:
+        _MENISCUS_TEMPLATE_CACHE[key] = None
+        return None
+    v_flat = bm_flat.calc_volume(signed=True) / (MM ** 3)
+    bm_flat.free()
+
+    bm_men = _build_meniscus_bmesh(mw, level, segments, rings)
+    if bm_men is None:
+        _MENISCUS_TEMPLATE_CACHE[key] = None
+        return None
+    v_men = bm_men.calc_volume(signed=True) / (MM ** 3)
+    bm_men.free()
+
+    delta = v_flat - v_men
+    template = {
+        'rise': rise,
+        'delta_under': delta,
+        'level0': level,
+    }
+    _MENISCUS_TEMPLATE_CACHE[key] = template
+    return template
+
+
+def fast_volume_at_level(mw, level_mm, segments=REVOLVE_SEGMENTS,
+                         rings=MENISCUS_RINGS):
+    """Объём через плоское тело и постоянную поправку мениска.
+
+    Использует шаблон мениска; вне полного эллиптического среза
+    возвращается к точному `volume_at_level()`.
+    """
+    template = _meniscus_template(mw, segments, rings)
+    if template is None or not _meniscus_valid(mw, level_mm):
+        return volume_at_level(mw, level_mm, segments)
+
+    contact = level_mm + template['rise']
+    bm = _build_flat_bmesh(mw, contact, segments)
+    if bm is None:
+        return 0.0
+    v_flat = bm.calc_volume(signed=True) / (MM ** 3)
+    bm.free()
+    return v_flat - template['delta_under']
+
+
 def solve_level_for_volume(mw, target_mm3,
                            tol_mm3=0.02, max_iter=48,
-                           segments=REVOLVE_SEGMENTS):
+                           segments=REVOLVE_SEGMENTS,
+                           fast=False,
+                           rings=MENISCUS_RINGS):
     """Бисекция мирового уровня по целевому объёму.
 
-    Объём считается полностью через меш (с мениском, если включён),
-    поэтому двойного учёта нет: бисекция просто ищет level_mm, при
-    котором volume_at_level(mw, level_mm) ≈ target_mm3.
+    При `fast=True` используется кэшированный шаблон мениска: объём
+    считается как плоское тело до кромки минус постоянная `ΔV_under`.
+    Это убирает пересборку мениска на каждой итерации бисекции.
+    Вне полного эллиптического среза автоматически используется точный
+    `volume_at_level()`.
 
     Returns
     -------
@@ -293,13 +397,18 @@ def solve_level_for_volume(mw, target_mm3,
     lo = bottom_level_min_mm(mw)
     hi = spill_level_mm(mw)
 
-    v_hi = volume_at_level(mw, hi, segments)
+    def volume_fn(level):
+        if fast:
+            return fast_volume_at_level(mw, level, segments, rings)
+        return volume_at_level(mw, level, segments)
+
+    v_hi = volume_fn(hi)
     if target_mm3 >= v_hi:
         return hi, v_hi, True
 
     for _ in range(max_iter):
         mid = 0.5 * (lo + hi)
-        v = volume_at_level(mw, mid, segments)
+        v = volume_fn(mid)
         if abs(v - target_mm3) <= tol_mm3:
             return mid, v, False
         if v < target_mm3:
@@ -307,7 +416,7 @@ def solve_level_for_volume(mw, target_mm3,
         else:
             hi = mid
     mid = 0.5 * (lo + hi)
-    return mid, volume_at_level(mw, mid, segments), False
+    return mid, volume_fn(mid), False
 
 
 # --- API ---
@@ -320,25 +429,32 @@ def create_liquid(name="Liquid"):
     return obj
 
 
-def build_liquid(obj, tube, target_mm3, segments=REVOLVE_SEGMENTS):
+def build_liquid(obj, tube, target_mm3, segments=REVOLVE_SEGMENTS,
+                 use_fast=True):
     """Перестраивает меш жидкости под текущую ориентацию трубки.
 
     Меш записывается в мировых координатах, поэтому объект жидкости
     остаётся в единичной трансформации и не зависит от иерархии.
+
+    При `use_fast=True` уровень ищется по кэшированному шаблону мениска
+    (плоское тело + постоянная ΔV_under), а полный меш собирается один
+    раз. Финальный объём возвращается по фактическому мешу.
 
     Returns
     -------
     dict с полями level_mm, volume_mm3, error_mm3, spilled, verts, faces.
     """
     mw = tube.matrix_world.copy()
-    level, vol, spilled = solve_level_for_volume(
-        mw, target_mm3, tol_mm3=0.02, segments=segments)
+    level, _solver_vol, spilled = solve_level_for_volume(
+        mw, target_mm3, tol_mm3=0.02, segments=segments, fast=use_fast)
 
     bm = _liquid_bmesh(mw, level, segments)
     me = obj.data
     if bm is None:
         me.clear_geometry()
+        vol = 0.0
     else:
+        vol = bm.calc_volume(signed=True) / (MM ** 3)
         bm.to_mesh(me)
         bm.free()
     me.update()
