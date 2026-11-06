@@ -9,6 +9,7 @@
 import argparse
 import json
 import os
+import sys
 
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
@@ -41,11 +42,19 @@ def _alpha_bbox(image):
     return int(xs.min()), int(ys.min()), int(xs.max()), int(ys.max())
 
 
+_FONT_CACHE = {}
+
+
 def _load_font(path, size):
-    try:
-        return ImageFont.truetype(path, size)
-    except OSError:
-        return ImageFont.load_default()
+    key = (path, int(size))
+    font = _FONT_CACHE.get(key)
+    if font is None:
+        try:
+            font = ImageFont.truetype(path, int(size))
+        except OSError:
+            font = ImageFont.load_default()
+        _FONT_CACHE[key] = font
+    return font
 
 
 def _overlay_lines(meta):
@@ -119,11 +128,12 @@ def _finalize_center(meta, scale, shift):
     )
 
 
-def _process(raw_path, final_path, args):
-    meta = {}
-    if args.metadata:
-        with open(args.metadata, 'r', encoding='utf-8') as fh:
-            meta = json.load(fh)
+def _process(raw_path, final_path, args, meta=None):
+    if meta is None:
+        meta = {}
+        if args.metadata:
+            with open(args.metadata, 'r', encoding='utf-8') as fh:
+                meta = json.load(fh)
 
     image = Image.open(raw_path).convert('RGBA')
     bbox = _alpha_bbox(image)
@@ -188,10 +198,64 @@ def _process(raw_path, final_path, args):
                       f'cx={(row.min() + row.max()) / 2:.1f}px')
 
 
+def _batch_namespace(job, opts):
+    """Собирает аргументы одного кадра из batch-JSON."""
+    return argparse.Namespace(
+        shift=int(job.get('shift', opts.get('shift_x_px', 105))),
+        height=int(job.get('height', opts.get('target_height_px', 0))),
+        fill=bool(job.get('fill', opts.get('fill_background', False))),
+        fill_color=job.get('fill_color', ','.join(
+            str(int(c)) for c in opts.get('fill_color',
+                                          (255, 255, 255, 255)))),
+        metadata=None,
+        compression=int(job.get('compression',
+                                opts.get('compression', 3))),
+        verbose=bool(job.get('verbose', opts.get('diagnostics', False))),
+    )
+
+
+def _process_batch(path):
+    """Один процесс на серию: jobs из JSON, опции общие."""
+    with open(path, 'r', encoding='utf-8') as fh:
+        data = json.load(fh)
+    opts = data.get('postprocess') or {}
+    jobs = data.get('jobs') or []
+    for i, job in enumerate(jobs, 1):
+        args = _batch_namespace(job, opts)
+        print(f'  [{i}/{len(jobs)}] {os.path.basename(job["final"])}',
+              flush=True)
+        _process(job['raw'], job['final'], args,
+                 meta=job.get('metadata') or {})
+    print(f'  Постобработка: {len(jobs)} кадров', flush=True)
+
+
+def _worker():
+    """Долгоживущий процесс: JSON-строки stdin, обработка по мере рендера."""
+    count = 0
+    for line in sys.stdin:
+        line = line.strip()
+        if not line:
+            continue
+        msg = json.loads(line)
+        opts = msg.get('postprocess') or {}
+        job = msg.get('job') or {}
+        args = _batch_namespace(job, opts)
+        print(f'  Постобработка: {os.path.basename(job["final"])}',
+              flush=True)
+        _process(job['raw'], job['final'], args,
+                 meta=job.get('metadata') or {})
+        count += 1
+    print(f'  Постобработка завершена: {count} кадров', flush=True)
+
+
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('raw')
-    parser.add_argument('final')
+    parser.add_argument('raw', nargs='?')
+    parser.add_argument('final', nargs='?')
+    parser.add_argument('--batch', default=None,
+                        help='JSON с jobs: один процесс на серию')
+    parser.add_argument('--worker', action='store_true',
+                        help='долгоживущий процесс: JSON-строки stdin')
     parser.add_argument('--shift', type=int, default=105)
     parser.add_argument('--height', type=int, default=0,
                         help='высота видимой трубки; 0 — без масштаба')
@@ -203,6 +267,14 @@ def main():
     parser.add_argument('--compression', type=int, default=3)
     parser.add_argument('--verbose', action='store_true')
     args = parser.parse_args()
+    if args.worker:
+        _worker()
+        return
+    if args.batch:
+        _process_batch(args.batch)
+        return
+    if not args.raw or not args.final:
+        parser.error('нужны raw и final или --batch')
     _process(args.raw, args.final, args)
 
 

@@ -84,10 +84,15 @@ def _configure_compositor(scene, distortion=None, fit=False):
     tree.links.new(lens.outputs['Image'], composite.inputs['Image'])
 
 
-def _write_metadata(metadata, overlay):
-    """Пишет временный JSON для внешней постобработки."""
+def _metadata_with_overlay(metadata, overlay):
     meta = dict(metadata or {})
     meta['overlay'] = dict(overlay or SCENE_OVERLAY)
+    return meta
+
+
+def _write_metadata(metadata, overlay):
+    """Пишет временный JSON для одиночной постобработки."""
+    meta = _metadata_with_overlay(metadata, overlay)
     fd, path = tempfile.mkstemp(prefix='injector3d_meta_', suffix='.json')
     with os.fdopen(fd, 'w', encoding='utf-8') as fh:
         json.dump(meta, fh, ensure_ascii=False)
@@ -124,6 +129,69 @@ def _postprocess(raw_path, final_path, metadata=None, postprocess=None,
         os.remove(meta_path)
 
 
+def _start_postprocess_worker(opts):
+    """Один долгоживущий процесс постобработки на серию."""
+    script = os.path.join(PROJECT_DIR, 'postprocess_reference.py')
+    python = shutil.which('python3') or 'python3'
+    return subprocess.Popen(
+        [python, script, '--worker'],
+        stdin=subprocess.PIPE, text=True, bufsize=1)
+
+
+def _submit_postprocess(worker, job, opts):
+    payload = {'postprocess': opts, 'job': job}
+    worker.stdin.write(json.dumps(payload, ensure_ascii=False) + '\n')
+    worker.stdin.flush()
+
+
+def _finish_postprocess_worker(worker, jobs):
+    worker.stdin.close()
+    code = worker.wait()
+    if code:
+        raise subprocess.CalledProcessError(
+            code, 'postprocess_reference.py --worker')
+    for job in jobs:
+        try:
+            os.remove(job['raw'])
+        except FileNotFoundError:
+            pass
+
+
+def _stop_worker_quietly(worker):
+    if worker is None or worker.poll() is not None:
+        return
+    try:
+        worker.stdin.close()
+    except OSError:
+        pass
+    worker.wait()
+
+
+def _manifest_frames(results):
+    frames = []
+    for job in results:
+        meta = dict(job['metadata'])
+        meta.pop('overlay', None)
+        meta['final'] = os.path.basename(job['final'])
+        frames.append(meta)
+    return frames
+
+
+def _write_manifest(base, step, ts, tag, results):
+    name = (f'{step}_manifest_{tag}_{ts}.json' if tag
+            else f'{step}_manifest_{ts}.json')
+    path = os.path.join(base, name)
+    payload = {
+        'step': step,
+        'tag': tag,
+        'timestamp': ts,
+        'frames': _manifest_frames(results),
+    }
+    with open(path, 'w', encoding='utf-8') as fh:
+        json.dump(payload, fh, ensure_ascii=False, indent=2)
+    print(f'  Manifest: {name}')
+
+
 def _prepare_render_scene():
     """Общие настройки кадра: разрешение, сэмплы, RGBA, композитор."""
     scene = bpy.context.scene
@@ -140,24 +208,33 @@ def _prepare_render_scene():
 
 def _render_one(scene, final_path, variant_name, metadata=None,
                 postprocess=None, overlay=None):
-    """Рендер одного кадра; постобработка включается через `postprocess`."""
+    """Рендер одного кадра; возвращает job для worker-постобработки.
+
+    При включённой постобработке кадр пишется во временный raw, а job
+    отправляется в долгоживущий worker. При выключенной — PNG сразу
+    считается финальным; job нужен только для manifest.
+    """
     opts = postprocess or SCENE_POSTPROCESS
+    meta = _metadata_with_overlay(metadata, overlay)
+    meta.setdefault('variant', variant_name)
     if opts.get('enabled', True):
         fd, raw_path = tempfile.mkstemp(
             prefix=f'injector3d_{variant_name}_', suffix='_raw.png')
         os.close(fd)
         scene.render.filepath = raw_path
         bpy.ops.render.render(write_still=True)
-        _postprocess(raw_path, final_path, metadata, opts, overlay)
-        os.remove(raw_path)
-    else:
-        if overlay and any(overlay.get(k) for k in
-                           ('volume', 'azimuth', 'tilt_deg',
-                            'ellipse_center', 'center_marker')):
-            print('  ! Постобработка выключена — подписи/маркер пропущены')
-        scene.render.filepath = final_path
-        bpy.ops.render.render(write_still=True)
+        print(f'  Кадр: {variant_name} -> raw')
+        return {'raw': raw_path, 'final': final_path, 'metadata': meta}
+
+    active = meta['overlay']
+    if any(active.get(k) for k in
+           ('volume', 'azimuth', 'tilt_deg', 'ellipse_center',
+            'center_marker')):
+        print('  ! Постобработка выключена — подписи/маркер пропущены')
+    scene.render.filepath = final_path
+    bpy.ops.render.render(write_still=True)
     print(f'  Рендер: {variant_name} -> {os.path.basename(final_path)}')
+    return {'raw': None, 'final': final_path, 'metadata': meta}
 
 
 def _volume_tag(volume_mm3):
@@ -256,32 +333,49 @@ def render_tube(tube, camera, step='1', on_tilt=None,
     attach_camera_to_tube(camera, tube)
 
     scene = _prepare_render_scene()
+    opts = postprocess or SCENE_POSTPROCESS
+    worker = (_start_postprocess_worker(opts)
+              if opts.get('enabled', True) else None)
+    results = []
 
-    for variant_name, tilt_euler in TILT_VARIANTS:
-        tube.rotation_euler = (
-            math.radians(tilt_euler[0]),
-            math.radians(tilt_euler[1]),
-            math.radians(tilt_euler[2]),
-        )
-        bpy.context.view_layer.update()
-        info = on_tilt(variant_name, tilt_euler) if on_tilt is not None else None
+    try:
+        for variant_name, tilt_euler in TILT_VARIANTS:
+            tube.rotation_euler = (
+                math.radians(tilt_euler[0]),
+                math.radians(tilt_euler[1]),
+                math.radians(tilt_euler[2]),
+            )
+            bpy.context.view_layer.update()
+            info = (on_tilt(variant_name, tilt_euler)
+                    if on_tilt is not None else None)
 
-        volume = info.get('volume_mm3') if info else None
-        center = _center_for_info(tube, info)
-        meta = _frame_metadata(
-            volume, None, _tilt_deg_from_matrix(tube.matrix_world),
-            center, scene)
-        render_fname = _render_filename(step, variant_name, ts, volume)
-        final_path = os.path.join(base, render_fname)
+            volume = info.get('volume_mm3') if info else None
+            center = _center_for_info(tube, info)
+            meta = _frame_metadata(
+                volume, None, _tilt_deg_from_matrix(tube.matrix_world),
+                center, scene)
+            render_fname = _render_filename(step, variant_name, ts, volume)
+            final_path = os.path.join(base, render_fname)
 
-        # Сохраняем .blend (историческое поведение render_tube)
-        blend_fname = f'{step}_{variant_name}_{ts}.blend'
-        blend_path = os.path.join(base, blend_fname)
-        bpy.ops.wm.save_as_mainfile(filepath=blend_path)
-        print(f'  Сохранён: {blend_fname}')
+            # Сохраняем .blend (историческое поведение render_tube)
+            blend_fname = f'{step}_{variant_name}_{ts}.blend'
+            blend_path = os.path.join(base, blend_fname)
+            bpy.ops.wm.save_as_mainfile(filepath=blend_path)
+            print(f'  Сохранён: {blend_fname}')
 
-        _render_one(scene, final_path, variant_name, meta,
-                    postprocess, overlay)
+            job = _render_one(
+                scene, final_path, variant_name, meta, postprocess, overlay)
+            results.append(job)
+            if worker is not None and job['raw']:
+                _submit_postprocess(worker, job, opts)
+        if worker is not None:
+            _finish_postprocess_worker(
+                worker, [job for job in results if job['raw']])
+            worker = None
+    finally:
+        _stop_worker_quietly(worker)
+
+    _write_manifest(base, step, ts, None, results)
 
 
 def tilt_matrix(theta_rad, azimuth_deg):
@@ -335,31 +429,48 @@ def render_ring(tube, liquid_upright, liquid_tilted,
     bpy.ops.wm.save_as_mainfile(filepath=master_path)
     print(f'  Сохранён master: {master_fname}')
 
-    for variant_name, azimuth_deg in variants:
-        if azimuth_deg is None:
-            tube.matrix_world = Matrix.Identity(4)
-            liquid_upright.hide_render = False
-            liquid_tilted.hide_render = True
-            info = info_upright
-            tilt_deg = 0.0
-        else:
-            tube.matrix_world = tilt_matrix(theta_rad, azimuth_deg)
-            liquid_tilted.rotation_euler = (0.0, 0.0,
-                                            math.radians(azimuth_deg))
-            liquid_upright.hide_render = True
-            liquid_tilted.hide_render = False
-            info = info_tilted
-            tilt_deg = angle
-        bpy.context.view_layer.update()
+    opts = postprocess or SCENE_POSTPROCESS
+    worker = (_start_postprocess_worker(opts)
+              if opts.get('enabled', True) else None)
+    results = []
+    try:
+        for variant_name, azimuth_deg in variants:
+            if azimuth_deg is None:
+                tube.matrix_world = Matrix.Identity(4)
+                liquid_upright.hide_render = False
+                liquid_tilted.hide_render = True
+                info = info_upright
+                tilt_deg = 0.0
+            else:
+                tube.matrix_world = tilt_matrix(theta_rad, azimuth_deg)
+                liquid_tilted.rotation_euler = (0.0, 0.0,
+                                                math.radians(azimuth_deg))
+                liquid_upright.hide_render = True
+                liquid_tilted.hide_render = False
+                info = info_tilted
+                tilt_deg = angle
+            bpy.context.view_layer.update()
 
-        volume = info.get('volume_mm3') if info else None
-        center = _center_for_info(tube, info)
-        meta = _frame_metadata(volume, azimuth_deg, tilt_deg, center, scene)
-        render_fname = _render_filename(
-            step, variant_name, ts, volume, tag)
-        final_path = os.path.join(base, render_fname)
-        _render_one(scene, final_path, variant_name, meta,
-                    postprocess, overlay)
+            volume = info.get('volume_mm3') if info else None
+            center = _center_for_info(tube, info)
+            meta = _frame_metadata(volume, azimuth_deg, tilt_deg, center,
+                                   scene)
+            render_fname = _render_filename(
+                step, variant_name, ts, volume, tag)
+            final_path = os.path.join(base, render_fname)
+            job = _render_one(
+                scene, final_path, variant_name, meta, postprocess, overlay)
+            results.append(job)
+            if worker is not None and job['raw']:
+                _submit_postprocess(worker, job, opts)
+        if worker is not None:
+            _finish_postprocess_worker(
+                worker, [job for job in results if job['raw']])
+            worker = None
+    finally:
+        _stop_worker_quietly(worker)
+
+    _write_manifest(base, step, ts, tag, results)
 
     # Оставляем сцену в вертикальном положении для сохранения/отладки.
     tube.matrix_world = Matrix.Identity(4)

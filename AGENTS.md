@@ -141,6 +141,10 @@ $BL --background --python injector3d/create_scene.py -- 4.5 --tilt-count 8 --til
 - `render.py` пишет `v<round(volume_mm3)>` в имя PNG, передаёт metadata
   (3D-центр, raw 2D-центр) и рисует подписи/маркер через
   `postprocess_reference.py`; при `enabled=False` PNG сохраняется сразу.
+- `postprocess_reference.py --worker` — один процесс на серию; raw
+  отправляется в stdin сразу после рендера, обработка идёт параллельно
+  рендеру следующего кадра. В конце серии пишется
+  `<step>_manifest[_<tag>]_<timestamp>.json`.
 - `liquid.contact_level_mm()` / `contact_center_mm()` — кромка контакта
   (`level + rise` для мениска) и её 3D-центр.
 - Lensdist для 2D-центра: `q = ((x-W/2)/W, (y-H/2)/H)`,
@@ -148,7 +152,8 @@ $BL --background --python injector3d/create_scene.py -- 4.5 --tilt-count 8 --til
   проверено на калибровочной сетке, расхождение ≤ 1.2 px.
 - `postprocess_reference.py` пересчитывает `x+shift`, `y·scale` и рисует
   маркер/блок; fill по умолчанию выключен, RGBA сохраняется.
-- Пока не сделаны: один процесс постобработки на серию, async и manifest.
+- Пока не сделаны: композиторный путь без overlay и отдельный скрипт
+  проверок; manifest содержит raw-2D-центр, финальный в него не пишется.
 
 ## Стадии и артефакты
 
