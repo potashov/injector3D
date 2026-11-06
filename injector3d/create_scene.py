@@ -32,9 +32,8 @@ from injector3d.liquid import (
     meniscus_wall_rise_mm,
     target_volume_mm3,
 )
-from injector3d.scene import setup_scene, create_azimuth_rig
-from injector3d.render import render_tube, render_ring
-from injector3d.scene import attach_camera_to_tube
+from injector3d.scene import setup_scene
+from injector3d.render import render_tube, render_ring, tilt_matrix
 from injector3d import config as cfg
 from injector3d.config import (
     INNER_DIAMETER,
@@ -256,7 +255,6 @@ def main():
     on_tilt = None
     liquid_upright = None
     liquid_tilted = None
-    rig = None
     if not with_liquid:
         print("   ⏭  Пропущено: жидкость подключается с пункта 2")
     else:
@@ -276,49 +274,33 @@ def main():
         else:
             print("   ⏭  Материалы: подключаются с пункта 4")
 
-        # Для пункта 4.5 строим два меша (upright + один наклонный)
+        # Для пункта 4.5 строим два меша: upright и один наклонный.
+        # Наклонный меш считается для той же мировой матрицы трубки, которую
+        # подставит render_ring при φ = 0 (наклон вокруг точки опоры), и для
+        # остальных азимутов только поворачивается вокруг мировой Z.
         if is_ring:
             n = n_tilt if n_tilt is not None else cfg.TILT_AZIMUTH_COUNT
             angle = angle_tilt if angle_tilt is not None else cfg.TILT_ANGLE_DEG
-            print(f"   Риг азимута: N={n}, θ={angle}°")
-            rig = create_azimuth_rig("AzimuthRig")
+            print(f"   Серия наклонов: N={n}, θ={angle}°")
 
-            # 1) Строим upright-меш (трубка вертикальна, в риге ещё нет)
-            tube.rotation_euler = (0.0, 0.0, 0.0)
+            # 1) upright-меш: трубка вертикальна
+            tube.matrix_world = Matrix.Identity(4)
             bpy.context.view_layer.update()
             info_up = build_liquid(liquid, tube, target_mm3, use_fast=True)
             liquid_upright = _dup_mesh_object(liquid)
             liquid_upright.name = "Liquid_upright"
 
-            # 2) Строим наклонный меш
-            tilt_rad = math.radians(angle)
-            tube.rotation_euler = (0.0, tilt_rad, 0.0)
+            # 2) наклонный меш при φ = 0: наклон θ вокруг точки опоры
+            tube.matrix_world = tilt_matrix(math.radians(angle), 0.0)
             bpy.context.view_layer.update()
             info_t = build_liquid(liquid, tube, target_mm3, use_fast=True)
             liquid_tilted = _dup_mesh_object(liquid)
             liquid_tilted.name = "Liquid_tilted"
 
-            # 3) Возвращаем трубку в вертикальное положение
-            tube.rotation_euler = (0.0, 0.0, 0.0)
+            # 3) Трубка обратно вертикально; камера в серии не дочерняя ей,
+            #    её ставит render_ring._place_camera (наведение на опору).
+            tube.matrix_world = Matrix.Identity(4)
             bpy.context.view_layer.update()
-
-            # 4) Привязываем камеру к трубке ДО родения с ригом: так
-            #    matrix_parent_inverse остаётся единичным и камера
-            #    повторяет и наклон θ, и азимут рига.
-            attach_camera_to_tube(camera, tube)
-
-            # 5) Устанавливаем иерархию рига. Локальный наклон θ задаёт
-            #    render_ring через tube.rotation_euler (только Y), азимут —
-            #    через rig.rotation_euler.z: итог Rz(φ)·Ry(θ), угол от
-            #    вертикали одинаков для всех φ.
-            tube.parent = rig
-            tube.matrix_parent_inverse = Matrix.Identity(4)
-            #    жидкости — дочерние ригу, но НЕ трубке: иначе уровень
-            #    наклонился бы вместе с ней
-            liquid_upright.parent = rig
-            liquid_upright.matrix_parent_inverse = Matrix.Identity(4)
-            liquid_tilted.parent = rig
-            liquid_tilted.matrix_parent_inverse = Matrix.Identity(4)
 
             # Исходный объект — промежуточная заготовка, в кадр не попадает
             liquid.hide_render = True
@@ -330,7 +312,7 @@ def main():
                   f"V={info_t['volume_mm3']:.2f} мм³")
             validate_liquid(liquid_upright, target_mm3, info_up)
             validate_liquid(liquid_tilted, target_mm3, info_t)
-            print("   ✅ Иерархия: rig → {tube → camera} + {liquids}\n")
+            print("   ✅ Жидкость: 2 меша (upright + наклонённый)\n")
         else:
             # Обычный рендер: перестраиваем жидкость на каждый наклон
             def on_tilt(variant_name, tilt_euler):
@@ -359,7 +341,7 @@ def main():
         n = n_tilt if n_tilt is not None else cfg.TILT_AZIMUTH_COUNT
         angle = angle_tilt if angle_tilt is not None else cfg.TILT_ANGLE_DEG
         print(f"5/5  Рендер N+1 ({n + 1} кадров, θ={angle}°)...")
-        render_ring(tube, camera, rig, liquid_upright, liquid_tilted,
+        render_ring(tube, camera, liquid_upright, liquid_tilted,
                     step=step, n=n, angle=angle)
     else:
         print(f"5/5  Рендер под 5 углами (пункт {step})...")

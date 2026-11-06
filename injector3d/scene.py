@@ -139,15 +139,6 @@ def setup_scene():
     return cam
 
 
-def create_azimuth_rig(name='AzimuthRig'):
-    """Пустышка для поворота трубки/камеры/жидкости вокруг мировой Z."""
-    rig = bpy.data.objects.new(name, None)
-    bpy.context.collection.objects.link(rig)
-    rig.rotation_mode = 'XYZ'
-    rig.rotation_euler = (0.0, 0.0, 0.0)
-    return rig
-
-
 def attach_camera_to_tube(camera, tube):
     """Жёстко привязывает камеру к трубке.
 

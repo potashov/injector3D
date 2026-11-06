@@ -1,6 +1,9 @@
 """Рендер трубки под разными углами наклона.
 
-Камера жёстко привязана к трубке, поэтому кадр не зависит от наклона.
+Пункты 1–4: камера жёстко привязана к трубке, кадр не зависит от наклона.
+Пункт 4.5 (серия N+1): трубка наклоняется на θ в плоскости азимута φ
+вокруг точки опоры, камера зафиксирована в мире и наведена на опору —
+горизонт жидкости виден в кадре под разными углами.
 Свет остаётся в мировых координатах, жидкость — тоже (уровень горизонтален).
 Имена файлов уникальны: <step>_<ракурс>_<timestamp>.png/.blend
 """
@@ -13,12 +16,16 @@ import subprocess
 import tempfile
 import time
 
+from mathutils import Matrix, Quaternion, Vector
+
 from .config import (
+    MM,
     OUTPUT_DIR,
     PROJECT_DIR,
     RENDER_RESOLUTION,
     SCENE_CAMERA,
     SCENE_POSTPROCESS,
+    TILT_PIVOT_Z_MM,
     TILT_VARIANTS,
     tilt_ring_variants,
 )
@@ -153,20 +160,61 @@ def render_tube(tube, camera, step='1', on_tilt=None):
         _render_one(raw_path, final_path, variant_name)
 
 
-def render_ring(tube, camera, rig, liquid_upright, liquid_tilted,
+def tilt_matrix(theta_rad, azimuth_deg):
+    """Мировая матрица трубки: наклон θ в азимуте φ вокруг точки опоры.
+
+    Ось поворота горизонтальна и перпендикулярна направлению наклона:
+    `a(φ) = (-sin φ, cos φ, 0)`. Тогда ось трубки уходит в
+    `(sin θ·cos φ, sin θ·sin φ, cos θ)` — угол θ от мировой Z одинаков при
+    любом φ, а azimuth задаёт только плоскость наклона.
+
+    Поворот выполняется вокруг `P = (0, 0, TILT_PIVOT_Z_MM)`, а не вокруг
+    дна: точка опоры при наклоне не смещается, поэтому фиксированная камера
+    видит трубку в кадре в одном и том же месте и масштабе.
+    """
+    phi = math.radians(azimuth_deg)
+    pivot = Vector((0.0, 0.0, TILT_PIVOT_Z_MM * MM))
+    axis = Vector((-math.sin(phi), math.cos(phi), 0.0))
+    rot = Matrix.Rotation(theta_rad, 4, axis)
+    return Matrix.Translation(pivot) @ rot @ Matrix.Translation(-pivot)
+
+
+def _place_camera(camera):
+    """Ставит камеру наведения на точку опоры (вариант A).
+
+    Камера не является дочерней трубке и не участвует в наклоне: `up` —
+    мировая +Z, оптика и дистанция — из `SCENE_CAMERA`. Так «вертикаль
+    мира» остаётся в мире, и горизонт жидкости в кадре меняётся от азимута
+    к азимуту, а трубка стоит в кадре одинаково во всех кадрах серии.
+    """
+    p = SCENE_CAMERA
+    pivot = Vector((0.0, 0.0, TILT_PIVOT_Z_MM * MM))
+    location = pivot + Vector((0.0,
+                               -p['distance_mm'] * MM,
+                               (p['camera_z_mm'] - p['target_z_mm']) * MM))
+
+    camera.parent = None
+    camera.matrix_parent_inverse = Matrix.Identity(4)
+    camera.location = location
+    base = (pivot - location).to_track_quat('-Z', 'Y')
+    roll = Quaternion((0.0, 0.0, 1.0), math.radians(p['roll_deg']))
+    camera.rotation_mode = 'QUATERNION'
+    camera.rotation_quaternion = base @ roll
+    camera.data.dof.focus_distance = p['distance_mm'] * MM
+
+
+def render_ring(tube, camera, liquid_upright, liquid_tilted,
                 step='4.5', n=4, angle=10.0):
-    """Рендер N+1 кадров: вертикаль + N азимутов при угле `angle`.
+    """Рендер N+1 кадров: вертикаль + N плоскостей наклона при угле `angle`.
 
-    Иерархия:
-      rig (вращение по Z = азимут)
-      ├─ tube (локальный наклон θ по Y)
-      │  └─ camera (parented в create_scene)
-      ├─ liquid_upright (parented к rig, hide_render для наклонных)
-      └─ liquid_tilted (parented к rig, hide_render для upright)
+    Азимут φ — не вращение сцены вокруг Z, а направление наклона: трубка
+    поворачивается вокруг точки опоры на θ вокруг горизонтальной оси
+    `a(φ)`, камера при этом неподвижна и смотрит на точку опоры.
 
-    Наклон θ задаётся в цикле через tube.rotation_euler.y — это
-    Ry(θ) внутри Rz(φ) рига, итоговый угол от вертикали одинаков.
-    Свет остаётся в мировых координатах.
+    Жидкость — статичный меш в мировых координатах, поэтому её достаточно
+    повернуть вокруг мировой Z: `Rz(φ)` не меняет `z_world`, значит наклонный
+    меш для φ = 0 годится для всех азимутов. Объём и горизонтальность
+    свободной поверхности при этом сохраняются.
     """
     variants = tilt_ring_variants(n, angle)
     tag = f'a{angle:g}_n{n}'
@@ -176,8 +224,10 @@ def render_ring(tube, camera, rig, liquid_upright, liquid_tilted,
 
     scene = _prepare_render_scene()
 
-    # Один master на серию; в кадр не сохраняем .blend по каждому ракурсу.
-    rig.rotation_euler = (0.0, 0.0, 0.0)
+    theta_rad = math.radians(angle)
+    _place_camera(camera)
+    tube.matrix_world = Matrix.Identity(4)
+    liquid_tilted.rotation_euler = (0.0, 0.0, 0.0)
     liquid_upright.hide_render = False
     liquid_tilted.hide_render = True
     bpy.context.view_layer.update()
@@ -187,17 +237,14 @@ def render_ring(tube, camera, rig, liquid_upright, liquid_tilted,
     bpy.ops.wm.save_as_mainfile(filepath=master_path)
     print(f'  Сохранён master: {master_fname}')
 
-    angle_rad = math.radians(angle)
     for variant_name, azimuth_deg in variants:
-        is_upright = azimuth_deg is None
-        if is_upright:
-            rig.rotation_euler = (0.0, 0.0, 0.0)
-            tube.rotation_euler = (0.0, 0.0, 0.0)
+        if azimuth_deg is None:
+            tube.matrix_world = Matrix.Identity(4)
             liquid_upright.hide_render = False
             liquid_tilted.hide_render = True
         else:
-            rig.rotation_euler = (0.0, 0.0, math.radians(azimuth_deg))
-            tube.rotation_euler = (0.0, angle_rad, 0.0)
+            tube.matrix_world = tilt_matrix(theta_rad, azimuth_deg)
+            liquid_tilted.rotation_euler = (0.0, 0.0, math.radians(azimuth_deg))
             liquid_upright.hide_render = True
             liquid_tilted.hide_render = False
         bpy.context.view_layer.update()
@@ -212,8 +259,8 @@ def render_ring(tube, camera, rig, liquid_upright, liquid_tilted,
         _render_one(raw_path, final_path, variant_name)
 
     # Оставляем сцену в вертикальном положении для сохранения/отладки.
-    rig.rotation_euler = (0.0, 0.0, 0.0)
-    tube.rotation_euler = (0.0, 0.0, 0.0)
+    tube.matrix_world = Matrix.Identity(4)
+    liquid_tilted.rotation_euler = (0.0, 0.0, 0.0)
     liquid_upright.hide_render = False
     liquid_tilted.hide_render = True
     bpy.context.view_layer.update()

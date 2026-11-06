@@ -24,7 +24,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from mathutils import Euler
+from mathutils import Euler, Vector
 
 from injector3d.liquid import (
     CLEARANCE,
@@ -192,6 +192,57 @@ def main():
                           f"{'OK' if good else 'FAIL'}")
     else:
         print(f"  Шаблон не построен (θ=30°) — возможно, мениск вне эллипса")
+
+    # 8. Инвариантность серии N+1 (пункт 4.5): AzimuthRig заменён наклоном
+    #    в плоскости азимута, поэтому наклонный меш жидкости перестраивается
+    #    один раз при φ = 0, а для остальных φ поворачивается вокруг мировой Z.
+    #    Тождество: Rz(φ) не меняет z_world и переводит наклонённую ось трубки
+    #    в наклонённую в азимуте φ, поэтому
+    #        Rz(φ) · [cyl(θ, φ=0) ∩ {z <= h}] = cyl(θ, φ) ∩ {z <= h}.
+    #    Отсюда объём, уровень и горизонтальность кромки одинаковы для всех φ.
+    print("\n8. Серия N+1: наклонный меш + поворот вокруг Z == перестроение")
+    from injector3d.render import tilt_matrix
+
+    theta8 = 20.0
+    mw0 = tilt_matrix(math.radians(theta8), 0.0)
+    level8, vol8, _ = solve_level_for_volume(mw0, target_volume_mm3(0.5))
+
+    def _world_verts(mw):
+        bm = _liquid_bmesh(mw, level8, REVOLVE_SEGMENTS)
+        pts = sorted((round(v.co.x / MM, 5), round(v.co.y / MM, 5),
+                      round(v.co.z / MM, 5)) for v in bm.verts)
+        bm.free()
+        return pts
+
+    base_pts = _world_verts(mw0)
+    for phi in (0.0, 90.0, 180.0, 270.0):
+        mw = tilt_matrix(math.radians(theta8), phi)
+        # Уровень и объём от азимута не зависят.
+        lev_p, vol_p, _ = solve_level_for_volume(mw, target_volume_mm3(0.5))
+        check(f"уровень φ={phi:g}", lev_p, level8, 0.02)
+        check(f"V φ={phi:g}", vol_p, vol8, 0.05)
+
+        # Rz(φ) от меша φ=0 совпадает с мешом, построенным для азимута φ:
+        # поворот вокруг мировой Z не меняет z_world и переводит наклонённую
+        # в φ=0 ось трубки в ось, наклонённую в азимуте φ.
+        rot = Euler((0.0, 0.0, math.radians(phi))).to_matrix()
+        rotated = sorted(tuple(round(c / MM, 5)
+                               for c in (rot @ Vector((x * MM, y * MM,
+                                                       z * MM))))
+                         for x, y, z in base_pts)
+        got = _world_verts(mw)
+        same = len(rotated) == len(got) and all(
+            all(abs(a - b) < 1e-4 for a, b in zip(p, q))
+            for p, q in zip(rotated, got))
+        ok &= same
+        print(f"  {'OK ' if same else 'FAIL'} Rz({phi:g}°)·меш(φ=0) == "
+              f"меш(φ={phi:g})  (вершин {len(rotated)}/{len(got)})")
+
+        zs = [p[2] for p in got]
+        z_top = max(zs)
+        rim = [z for z in zs if abs(z - z_top) < 1e-6]
+        check(f"z кромки φ={phi:g}", z_top, level8 + rise, 1e-4)
+        check(f"горизонтальность φ={phi:g}", max(rim) - min(rim), 0.0, 1e-4)
 
     print("\n" + ("ВСЕ ПРОВЕРКИ ПРОЙДЕНЫ" if ok else "ЕСТЬ НЕСОВПАДЕНИЯ"))
     return 0 if ok else 1
