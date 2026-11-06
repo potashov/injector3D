@@ -75,13 +75,14 @@ $BL --background --python gpu_info.py
     обходит конус с полууглом θ. Старый `AzimuthRig` давал
     `Rz(φ)·Ry(θ)` — там φ сокращался, и все кадры были идентичны.
   Рендер 1200×1200 в RGBA с `film_transparent=True`, Lensdist
-  `use_fit=False`, затем белый фон через `postprocess_reference.py`;
-  имена `<step>_<ракурс>_<timestamp>.png|.blend`.
+  `use_fit=False`, затем опциональная постобработка; имена
+  `<step>_<ракурс>[_<tag>]_v<объём>_<timestamp>.png|.blend`.
 - `render_reference.py` — отдельный кадр под `06120.png`:
   `config.REFERENCE_CAMERA`, дополнительно сдвиг +105 px и высота 1124 px.
-- `postprocess_reference.py` — системный `python3` (PIL/numpy/scipy):
-  заливает чёрные полосы Lensdist; `--height 0` отключает масштаб, `--shift`
-  задаёт сдвиг. Для основной серии — `--shift 105 --height 0`.
+- `postprocess_reference.py` — системный `python3` (PIL/numpy): по
+  умолчанию сохраняет RGBA без заливки, `--fill` композитит `--fill-color`;
+  `--height 0` отключает масштаб, `--shift` задаёт сдвиг; `--metadata`
+  добавляет подписи/маркер. Для основной серии — `--shift 105 --height 0`.
 - `reports/reference_camera_06120.md` — параметры камеры и метрики.
 - `reports/step*.md` — отчёты по пунктам плана; `reports/step4.5.md` —
   подробный план промежуточного пункта 4.5 (N+1, кэш мениска, наклон по
@@ -128,6 +129,27 @@ $BL --background --python injector3d/create_scene.py -- 4.5 --tilt-count 8 --til
   замеры производительности и расклад прогона по стадиям —
   `reports/performance.md`.
 
+## Пункт 5 — постобработка и подписи — ОСНОВНОЕ РЕАЛИЗОВАНО
+
+- `config.SCENE_POSTPROCESS`: `enabled`, `fill_background`, `fill_color`,
+  `shift_x_px`, `target_height_px`, `compression`, `diagnostics`.
+- `config.SCENE_OVERLAY`: `volume`, `azimuth`, `tilt_deg`,
+  `ellipse_center`, `center_marker`, шрифт/цвета/размер.
+- CLI: `--no-postprocess`, `--fill-background/--no-fill-background`,
+  `--fill-color R,G,B[,A]`, `--overlay-volume/azimuth/tilt/ellipse/center`,
+  `--center-marker` и их `--no-*`-версии.
+- `render.py` пишет `v<round(volume_mm3)>` в имя PNG, передаёт metadata
+  (3D-центр, raw 2D-центр) и рисует подписи/маркер через
+  `postprocess_reference.py`; при `enabled=False` PNG сохраняется сразу.
+- `liquid.contact_level_mm()` / `contact_center_mm()` — кромка контакта
+  (`level + rise` для мениска) и её 3D-центр.
+- Lensdist для 2D-центра: `q = ((x-W/2)/W, (y-H/2)/H)`,
+  `factor = (1+d)/(1+4d|q|²)`, `p' = center + (p-center)·factor`;
+  проверено на калибровочной сетке, расхождение ≤ 1.2 px.
+- `postprocess_reference.py` пересчитывает `x+shift`, `y·scale` и рисует
+  маркер/блок; fill по умолчанию выключен, RGBA сохраняется.
+- Пока не сделаны: один процесс постобработки на серию, async и manifest.
+
 ## Стадии и артефакты
 
 - Номер пункта после `--` управляет не только именами, но и составом сцены:
@@ -140,14 +162,15 @@ $BL --background --python injector3d/create_scene.py -- 4.5 --tilt-count 8 --til
 - `output/1–3/` — исторические серии студийной камеры 85 мм; текущая
   камера референса применяется при новом прогоне соответствующего пункта.
 - `output/4.5/` — серия N+1; номер пункта и префикс файлов —
-  `4.5`, отдельно от `output/4/`.
+  `4.5`, отдельно от `output/4/`; в имени PNG есть `v<объём>`.
 - Один прогон `render_ring()` = N+1 кадров 1200×1200 @ 128 сэмплов
   (GPU ~9.8 с/кадр в среднем, 5.7–13.4 с в зависимости от азимута; есть
   `RENDER_TIME_LIMIT_S = 75` — страховка, штатно не срабатывает). Серия
   масштабируется по N: N=4 → 5 кадров, N=8 → 9. Полная серия небесплатна:
   Cycles — ~93 % времени, жидкость при 2 постройках на серию — <1 %.
 - `config.SCENE_POSTPROCESS` для основной серии: `shift_x_px=105`,
-  `target_height_px=0`. Сдвиг совпадает с референсом. В обоих режимах
+  `target_height_px=0`, `fill_background=False`. Сдвиг совпадает с
+  референсом; фон по умолчанию прозрачный. В обоих режимах
   камера привязана к трубке, поэтому трубка целиком в кадре при любом
   наклоне и не уходит за его границу.
   Вертикальная растяжка отключена — она привязана к одиночной

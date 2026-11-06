@@ -32,7 +32,7 @@
 - Blender 5.2.3 LTS (локальная headless-сборка в `blender-5.2.3-linux-x64/`)
 - Cycles (GPU/CUDA или CPU)
 - Python-модули `injector3d/` (bpy, bmesh, mathutils)
-- Постобработка: `python3` + PIL/numpy/scipy
+- Постобработка: `python3` + PIL/numpy
 
 ---
 
@@ -91,7 +91,7 @@ injector3d/
 └── create_scene.py      # Entry-point (сборка сцены, валидация, рендер)
 
 render_reference.py      # Одиночный кадр под 06120.png
-postprocess_reference.py # Белый фон, масштаб/сдвиг (system python3)
+postprocess_reference.py # Опциональная заливка, масштаб/сдвиг, подписи
 check_liquid.py          # Числовая самопроверка объёма и уровня
 check_cuda.py            # Диагностика доступности CUDA
 check_build_cuda.py      # Проверка поддержки CUDA в сборке Blender
@@ -139,9 +139,12 @@ gpu_info.py              # Список устройств рендера и п�
   вокруг `TILT_PIVOT_Z_MM = 46 мм`). Нормаль горизонта жидкости в системе
   трубки `R(φ)⁻¹·e_z` обходит конус с полууглом θ. Старый `AzimuthRig`
   с `Rz(φ)·Ry(θ)` сокращал φ — кадры были идентичны.
-- `SCENE_POSTPROCESS`: `shift_x_px=105`, `target_height_px=0`. Сдвиг
-  совпадает с референсом: камера привязана к трубке, поэтому трубка
-  целиком в кадре во всех ракурсах.
+- `SCENE_POSTPROCESS`: `shift_x_px=105`, `target_height_px=0`,
+  `fill_background=False`. Сдвиг совпадает с референсом: камера привязана
+  к трубке, поэтому трубка целиком в кадре во всех ракурсах. Заливка фона
+  включается отдельно; по умолчанию PNG остаётся RGBA.
+- `SCENE_OVERLAY` и `--overlay-*` / `--center-marker` добавляют подписи и
+  маркер 2D-центра; `--no-postprocess` отключает всю постобработку.
 
 ### Рендер
 

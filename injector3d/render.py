@@ -7,17 +7,14 @@
 - `render_tube()` (п. 1–4): наклон вокруг дна по историческим Эйлеровым
   `config.TILT_VARIANTS`;
 - `render_ring()` (п. 4.5): наклон на θ в плоскости азимута φ вокруг точки
-  опоры — `tilt_matrix(θ, φ) = Rz(φ)·Ry(θ)·Rz(φ)⁻¹` в точке опоры. Именно
-  этот тип поворота даёт разные кадры: нормаль горизонта жидкости в системе
-  координат трубки равна `Rz(φ)·Ry(θ)⁻¹·e_z` и обходит конус с полууглом θ.
-  Вращение всей связки вокруг Z (`Rz(φ)·Ry(θ)`, старый AzimuthRig) такой
-  нормали φ не даёт — все азимуты были бы идентичны.
+  опоры — `tilt_matrix(θ, φ) = Rz(φ)·Ry(θ)·Rz(φ)⁻¹` в точке опоры.
 
 Свет остаётся в мировых координатах, жидкость — тоже (уровень горизонтален).
-Имена файлов уникальны: <step>_<ракурс>_<timestamp>.png/.blend
+Имена файлов: `<step>_<ракурс>[_<tag>][_v<объём>]_<timestamp>.png`.
 """
 
 import bpy
+import json
 import math
 import os
 import shutil
@@ -26,6 +23,7 @@ import tempfile
 import time
 
 from mathutils import Matrix, Vector
+from bpy_extras.object_utils import world_to_camera_view
 
 from .config import (
     MM,
@@ -33,11 +31,13 @@ from .config import (
     PROJECT_DIR,
     RENDER_RESOLUTION,
     SCENE_CAMERA,
+    SCENE_OVERLAY,
     SCENE_POSTPROCESS,
     TILT_PIVOT_Z_MM,
     TILT_VARIANTS,
     tilt_ring_variants,
 )
+from .liquid import contact_center_mm
 from .scene import attach_camera_to_tube
 
 
@@ -84,15 +84,44 @@ def _configure_compositor(scene, distortion=None, fit=False):
     tree.links.new(lens.outputs['Image'], composite.inputs['Image'])
 
 
-def _postprocess(raw_path, final_path):
-    """Заливает чёрные полосы Lensdist белым через системный python3."""
+def _write_metadata(metadata, overlay):
+    """Пишет временный JSON для внешней постобработки."""
+    meta = dict(metadata or {})
+    meta['overlay'] = dict(overlay or SCENE_OVERLAY)
+    fd, path = tempfile.mkstemp(prefix='injector3d_meta_', suffix='.json')
+    with os.fdopen(fd, 'w', encoding='utf-8') as fh:
+        json.dump(meta, fh, ensure_ascii=False)
+    return path
+
+
+def _format_color(color):
+    return ','.join(str(int(c)) for c in color)
+
+
+def _postprocess(raw_path, final_path, metadata=None, postprocess=None,
+                 overlay=None):
+    """Внешняя постобработка: заливка, сдвиг, масштаб, подписи."""
+    opts = postprocess or SCENE_POSTPROCESS
     script = os.path.join(PROJECT_DIR, 'postprocess_reference.py')
     python = shutil.which('python3') or 'python3'
-    subprocess.run([
+    meta_path = _write_metadata(metadata, overlay)
+    cmd = [
         python, script, raw_path, final_path,
-        '--shift', str(SCENE_POSTPROCESS['shift_x_px']),
-        '--height', str(SCENE_POSTPROCESS['target_height_px']),
-    ], check=True)
+        '--shift', str(opts.get('shift_x_px', 0)),
+        '--height', str(opts.get('target_height_px', 0)),
+        '--compression', str(opts.get('compression', 3)),
+        '--metadata', meta_path,
+    ]
+    if opts.get('fill_background', False):
+        cmd.append('--fill')
+        cmd += ['--fill-color',
+                _format_color(opts.get('fill_color', (255, 255, 255, 255)))]
+    if opts.get('diagnostics', False):
+        cmd.append('--verbose')
+    try:
+        subprocess.run(cmd, check=True)
+    finally:
+        os.remove(meta_path)
 
 
 def _prepare_render_scene():
@@ -109,15 +138,101 @@ def _prepare_render_scene():
     return scene
 
 
-def _render_one(raw_path, final_path, variant_name):
-    """Рендер одного кадра и внешняя постобработка."""
-    bpy.ops.render.render(write_still=True)
-    _postprocess(raw_path, final_path)
-    os.remove(raw_path)
+def _render_one(scene, final_path, variant_name, metadata=None,
+                postprocess=None, overlay=None):
+    """Рендер одного кадра; постобработка включается через `postprocess`."""
+    opts = postprocess or SCENE_POSTPROCESS
+    if opts.get('enabled', True):
+        fd, raw_path = tempfile.mkstemp(
+            prefix=f'injector3d_{variant_name}_', suffix='_raw.png')
+        os.close(fd)
+        scene.render.filepath = raw_path
+        bpy.ops.render.render(write_still=True)
+        _postprocess(raw_path, final_path, metadata, opts, overlay)
+        os.remove(raw_path)
+    else:
+        if overlay and any(overlay.get(k) for k in
+                           ('volume', 'azimuth', 'tilt_deg',
+                            'ellipse_center', 'center_marker')):
+            print('  ! Постобработка выключена — подписи/маркер пропущены')
+        scene.render.filepath = final_path
+        bpy.ops.render.render(write_still=True)
     print(f'  Рендер: {variant_name} -> {os.path.basename(final_path)}')
 
 
-def render_tube(tube, camera, step='1', on_tilt=None):
+def _volume_tag(volume_mm3):
+    if volume_mm3 is None:
+        return ''
+    return f'_v{int(round(float(volume_mm3)))}'
+
+
+def _render_filename(step, variant_name, ts, volume_mm3, tag=None):
+    parts = [step, variant_name]
+    if tag:
+        parts.append(tag)
+    stem = '_'.join(parts) + _volume_tag(volume_mm3)
+    return f'{stem}_{ts}.png'
+
+
+def _tilt_deg_from_matrix(mw):
+    """Угол оси трубки от мировой Z, градусы."""
+    c = max(-1.0, min(1.0, float(mw[2][2])))
+    return math.degrees(math.acos(c))
+
+
+def _lensdistort_raw_px(x_px, y_px, width, height, distortion):
+    """Пиксель до Lensdist -> пиксель после Lensdist (raw кадр).
+
+    Формула получена из Blender-шейдера `compositor_radial_lens_distortion`
+    и сверена с рендером калибровочной сетки: расхождение центроидов
+    ≤ 1.2 px. `x_px`/`y_px` — координаты с началом в левом верхнем углу.
+    """
+    cx, cy = width / 2.0, height / 2.0
+    qx = (x_px - cx) / width
+    qy = (y_px - cy) / height
+    r2 = qx * qx + qy * qy
+    factor = (1.0 + distortion) / (1.0 + 4.0 * distortion * r2)
+    return cx + (x_px - cx) * factor, cy + (y_px - cy) * factor
+
+
+def _project_center_raw(center_mm, scene):
+    """3D-центр (мм) -> 2D raw-пиксель после Lensdist, левый верхний угол."""
+    cam = scene.camera
+    if cam is None or center_mm is None:
+        return None
+    point = Vector((center_mm[0] * MM,
+                    center_mm[1] * MM,
+                    center_mm[2] * MM))
+    co = world_to_camera_view(scene, cam, point)
+    width = scene.render.resolution_x
+    height = scene.render.resolution_y
+    x_pre = co.x * width
+    y_pre = (1.0 - co.y) * height
+    return _lensdistort_raw_px(
+        x_pre, y_pre, width, height, SCENE_CAMERA['distortion'])
+
+
+def _frame_metadata(volume_mm3, azimuth_deg, tilt_deg, center_mm, scene):
+    meta = {
+        'volume_mm3': volume_mm3,
+        'azimuth_deg': azimuth_deg,
+        'tilt_deg': tilt_deg,
+    }
+    if center_mm is not None:
+        meta['ellipse_center_3d_mm'] = list(center_mm)
+        meta['ellipse_center_2d_raw_px'] = list(
+            _project_center_raw(center_mm, scene))
+    return meta
+
+
+def _center_for_info(tube, info):
+    if not info or info.get('level_mm') is None:
+        return None
+    return contact_center_mm(tube.matrix_world, info['level_mm'])
+
+
+def render_tube(tube, camera, step='1', on_tilt=None,
+                postprocess=None, overlay=None):
     """Рендер трубки под каждым из TILT_VARIANTS.
 
     Parameters
@@ -131,6 +246,8 @@ def render_tube(tube, camera, step='1', on_tilt=None):
     on_tilt : callable | None
         Вызывается после установки поворота трубки — перестроить жидкость
         под новую ориентацию (её уровень горизонтален в мировых координатах).
+    postprocess, overlay : dict | None
+        Настройки постобработки и подписей; None — значения из config.
     """
     ts = time.strftime('%Y%m%d_%H%M%S')
     base = os.path.join(OUTPUT_DIR, step)
@@ -141,32 +258,30 @@ def render_tube(tube, camera, step='1', on_tilt=None):
     scene = _prepare_render_scene()
 
     for variant_name, tilt_euler in TILT_VARIANTS:
-        # Устанавливаем наклон
         tube.rotation_euler = (
             math.radians(tilt_euler[0]),
             math.radians(tilt_euler[1]),
             math.radians(tilt_euler[2]),
         )
         bpy.context.view_layer.update()
-        if on_tilt is not None:
-            on_tilt(variant_name, tilt_euler)
+        info = on_tilt(variant_name, tilt_euler) if on_tilt is not None else None
 
-        # Рендер во временный RGBA, затем белый фон и дисторсия в постобработке
-        render_fname = f'{step}_{variant_name}_{ts}.png'
+        volume = info.get('volume_mm3') if info else None
+        center = _center_for_info(tube, info)
+        meta = _frame_metadata(
+            volume, None, _tilt_deg_from_matrix(tube.matrix_world),
+            center, scene)
+        render_fname = _render_filename(step, variant_name, ts, volume)
         final_path = os.path.join(base, render_fname)
-        raw_path = os.path.join(
-            tempfile.gettempdir(),
-            f'injector3d_{step}_{variant_name}_{ts}_raw.png',
-        )
-        scene.render.filepath = raw_path
 
-        # Сохраняем .blend
+        # Сохраняем .blend (историческое поведение render_tube)
         blend_fname = f'{step}_{variant_name}_{ts}.blend'
         blend_path = os.path.join(base, blend_fname)
         bpy.ops.wm.save_as_mainfile(filepath=blend_path)
         print(f'  Сохранён: {blend_fname}')
 
-        _render_one(raw_path, final_path, variant_name)
+        _render_one(scene, final_path, variant_name, meta,
+                    postprocess, overlay)
 
 
 def tilt_matrix(theta_rad, azimuth_deg):
@@ -176,15 +291,6 @@ def tilt_matrix(theta_rad, azimuth_deg):
     горизонтальной оси `a(φ) = (-sin φ, cos φ, 0)`. Ось трубки уходит в
     `(sin θ·cos φ, sin θ·sin φ, cos θ)`: угол θ от мировой Z одинаков при
     любом φ, азимут выбирает только плоскость наклона.
-
-    Важно отличие от `Rz(φ)·Ry(θ)` (старый AzimuthRig): здесь нормаль
-    горизонта жидкости в системе координат трубки `R(φ)⁻¹·e_z =
-    Rz(φ)·Ry(θ)⁻¹·e_z` зависит от φ и обходит конус с полууглом θ, поэтому
-    при жёстко привязанной камере кадры получаются разными.
-
-    Поворот выполняется вокруг `P = (0, 0, TILT_PIVOT_Z_MM)` — середина
-    трубки. При наклоне вокруг дна (z = 0) верхний край на θ = 30° уезжал
-    бы вбок на ~46 мм.
     """
     phi = math.radians(azimuth_deg)
     pivot = Vector((0.0, 0.0, TILT_PIVOT_Z_MM * MM))
@@ -194,7 +300,9 @@ def tilt_matrix(theta_rad, azimuth_deg):
 
 
 def render_ring(tube, liquid_upright, liquid_tilted,
-                step='4.5', n=4, angle=10.0):
+                step='4.5', n=4, angle=10.0,
+                info_upright=None, info_tilted=None,
+                postprocess=None, overlay=None):
     """Рендер N+1 кадров: вертикаль + N плоскостей наклона при угле `angle`.
 
     Камера — дочерняя трубке (привязка сделана в `create_scene` на этапе
@@ -205,10 +313,7 @@ def render_ring(tube, liquid_upright, liquid_tilted,
     Жидкость — независимый меш в мировых координатах: её уровень
     горизонтален в мире и не должен наклоняться вместе с трубкой. Наклонный
     меш строится один раз при φ = 0 и для остальных φ поворачивается вокруг
-    мировой Z. Это корректно, потому что `Rz(φ)` не меняет `z_world`, а
-    полость и точка опоры лежат на оси Z, поэтому
-        Rz(φ) · [M(0)(cavity) ∩ {z <= h}] = M(φ)(cavity) ∩ {z <= h}.
-    Тождество закреплено в `check_liquid.py`, раздел 8.
+    мировой Z.
     """
     variants = tilt_ring_variants(n, angle)
     tag = f'a{angle:g}_n{n}'
@@ -235,21 +340,26 @@ def render_ring(tube, liquid_upright, liquid_tilted,
             tube.matrix_world = Matrix.Identity(4)
             liquid_upright.hide_render = False
             liquid_tilted.hide_render = True
+            info = info_upright
+            tilt_deg = 0.0
         else:
             tube.matrix_world = tilt_matrix(theta_rad, azimuth_deg)
-            liquid_tilted.rotation_euler = (0.0, 0.0, math.radians(azimuth_deg))
+            liquid_tilted.rotation_euler = (0.0, 0.0,
+                                            math.radians(azimuth_deg))
             liquid_upright.hide_render = True
             liquid_tilted.hide_render = False
+            info = info_tilted
+            tilt_deg = angle
         bpy.context.view_layer.update()
 
-        render_fname = f'{step}_{variant_name}_{tag}_{ts}.png'
+        volume = info.get('volume_mm3') if info else None
+        center = _center_for_info(tube, info)
+        meta = _frame_metadata(volume, azimuth_deg, tilt_deg, center, scene)
+        render_fname = _render_filename(
+            step, variant_name, ts, volume, tag)
         final_path = os.path.join(base, render_fname)
-        raw_path = os.path.join(
-            tempfile.gettempdir(),
-            f'injector3d_{step}_{variant_name}_{tag}_{ts}_raw.png',
-        )
-        scene.render.filepath = raw_path
-        _render_one(raw_path, final_path, variant_name)
+        _render_one(scene, final_path, variant_name, meta,
+                    postprocess, overlay)
 
     # Оставляем сцену в вертикальном положении для сохранения/отладки.
     tube.matrix_world = Matrix.Identity(4)

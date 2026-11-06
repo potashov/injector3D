@@ -91,8 +91,31 @@ RENDER_RESOLUTION = REFERENCE_RESOLUTION
 # Для серии из 5 наклонов трубка смещена вправо на 105 px — это безопасно,
 # так как камера привязана к трубке и не уходит за границу кадра.
 SCENE_POSTPROCESS = {
+    'enabled': True,
+    'fill_background': False,
+    'fill_color': (255, 255, 255, 255),
     'shift_x_px': 105,
     'target_height_px': 0,
+    'compression': 3,
+    'diagnostics': False,
+}
+
+# Подписи и маркер на кадре. Каждый элемент включается отдельно; по
+# умолчанию не добавляется ничего.
+SCENE_OVERLAY = {
+    'volume': False,
+    'azimuth': False,
+    'tilt_deg': False,
+    'ellipse_center': False,
+    'center_marker': False,
+    'font_path': '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',
+    'font_size_px': 18,
+    'margin_px': 12,
+    'text_color': (0, 0, 0, 255),
+    'stroke_color': (255, 255, 255, 255),
+    'stroke_width_px': 1,
+    'marker_color': (255, 0, 0, 255),
+    'marker_size_px': 3,
 }
 
 # Камера на -Y смотрит в +Y (up = +Z), поэтому в кадре +X — вправо:

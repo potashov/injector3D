@@ -95,6 +95,7 @@ def main():
         python, postprocess, raw_path, final_path,
         '--shift', str(p['shift_x_px']),
         '--height', str(p['target_height_px']),
+        '--fill', '--fill-color', '255,255,255,255',
     ], check=True)
     os.remove(raw_path)
     print(f'  Готово: {final_path}')

@@ -72,6 +72,58 @@ def _step_ge(step, n):
         return False
 
 
+def _parse_color(text):
+    """``R,G,B[,A]`` (0..255) -> кортеж int."""
+    parts = [int(x.strip()) for x in text.split(',')]
+    if len(parts) not in (3, 4):
+        raise ValueError('цвет: R,G,B или R,G,B,A')
+    if any(v < 0 or v > 255 for v in parts):
+        raise ValueError('компоненты цвета: 0..255')
+    if len(parts) == 3:
+        parts.append(255)
+    return tuple(parts)
+
+
+def parse_render_options(tail):
+    """CLI-флаги постобработки и подписей (п. 5)."""
+    postprocess = dict(cfg.SCENE_POSTPROCESS)
+    overlay = dict(cfg.SCENE_OVERLAY)
+    i = 0
+    while i < len(tail):
+        arg = tail[i]
+        if arg == '--no-postprocess':
+            postprocess['enabled'] = False
+        elif arg == '--fill-background':
+            postprocess['fill_background'] = True
+        elif arg == '--no-fill-background':
+            postprocess['fill_background'] = False
+        elif arg == '--fill-color' and i + 1 < len(tail):
+            postprocess['fill_color'] = _parse_color(tail[i + 1])
+            i += 1
+        elif arg == '--overlay-volume':
+            overlay['volume'] = True
+        elif arg == '--no-overlay-volume':
+            overlay['volume'] = False
+        elif arg == '--overlay-azimuth':
+            overlay['azimuth'] = True
+        elif arg == '--no-overlay-azimuth':
+            overlay['azimuth'] = False
+        elif arg == '--overlay-tilt':
+            overlay['tilt_deg'] = True
+        elif arg == '--no-overlay-tilt':
+            overlay['tilt_deg'] = False
+        elif arg in ('--overlay-ellipse', '--overlay-center'):
+            overlay['ellipse_center'] = True
+        elif arg in ('--no-overlay-ellipse', '--no-overlay-center'):
+            overlay['ellipse_center'] = False
+        elif arg == '--center-marker':
+            overlay['center_marker'] = True
+        elif arg == '--no-center-marker':
+            overlay['center_marker'] = False
+        i += 1
+    return postprocess, overlay
+
+
 def validate_tube(tube):
     """Валидация геометрии: габариты, замкнутость, объём, manifold.
 
@@ -204,23 +256,25 @@ def main():
     """Точка входа."""
     step = parse_step()
 
-    # Разбираем CLI-параметры пункта 4.5
+    # Разбираем CLI-параметры пунктов 4.5 и 5
     n_tilt = None
     angle_tilt = None
     argv = sys.argv
+    tail = []
     if "--" in argv:
         tail = argv[argv.index("--") + 1:]
-        i = 0
-        while i < len(tail):
-            if tail[i] == '--tilt-count' and i + 1 < len(tail):
-                n_tilt = int(tail[i + 1])
-                i += 2
-                continue
-            if tail[i] == '--tilt-angle' and i + 1 < len(tail):
-                angle_tilt = float(tail[i + 1])
-                i += 2
-                continue
-            i += 1
+    i = 0
+    while i < len(tail):
+        if tail[i] == '--tilt-count' and i + 1 < len(tail):
+            n_tilt = int(tail[i + 1])
+            i += 2
+            continue
+        if tail[i] == '--tilt-angle' and i + 1 < len(tail):
+            angle_tilt = float(tail[i + 1])
+            i += 2
+            continue
+        i += 1
+    postprocess, overlay = parse_render_options(tail)
 
     # Жидкость с горизонтальным уровнем появляется с пункта 2, материалы —
     # с пункта 4: раньше рендер показывал бы то, чего на стадии ещё нет.
@@ -348,10 +402,13 @@ def main():
         angle = angle_tilt if angle_tilt is not None else cfg.TILT_ANGLE_DEG
         print(f"5/5  Рендер N+1 ({n + 1} кадров, θ={angle}°)...")
         render_ring(tube, liquid_upright, liquid_tilted,
-                    step=step, n=n, angle=angle)
+                    step=step, n=n, angle=angle,
+                    info_upright=info_up, info_tilted=info_t,
+                    postprocess=postprocess, overlay=overlay)
     else:
         print(f"5/5  Рендер под 5 углами (пункт {step})...")
-        render_tube(tube, camera, step=step, on_tilt=on_tilt)
+        render_tube(tube, camera, step=step, on_tilt=on_tilt,
+                    postprocess=postprocess, overlay=overlay)
     print("   ✅ Готово.\n")
 
     print(f"=== Пункт {step} завершён ===")

@@ -2,6 +2,34 @@
 
 ## [Не выпущено]
 
+### Добавлено — постобработка, подписи и метаданные кадра (пункт 5)
+- `config.SCENE_POSTPROCESS` расширен: `enabled`, `fill_background`,
+  `fill_color`, `compression`, `diagnostics`; добавлен `SCENE_OVERLAY`
+  с отдельными флагами объёма, азимута, θ, центра и маркера.
+- CLI `create_scene.py`: `--no-postprocess`,
+  `--fill-background/--no-fill-background`, `--fill-color R,G,B[,A]`,
+  `--overlay-volume/azimuth/tilt/ellipse/center`, `--center-marker` и
+  `--no-*`-версии. `--overlay-ellipse` и `--overlay-center` — синонимы.
+- `render.py`: метаданные на кадр, `v<round(volume_mm3)>` в имени PNG,
+  опциональная заливка/сдвиг/масштаб, подписи и маркер. Объём берётся из
+  фактического меша (`info['volume_mm3']`); `render_ring()` получает
+  `info_upright`/`info_tilted` из `create_scene`.
+- `liquid.contact_level_mm()` и `contact_center_mm()` — кромка контакта
+  (`level + rise` для мениска) и её 3D-центр.
+- `postprocess_reference.py` переписан: bbox по alpha, без scipy,
+  `--fill`/`--fill-color`, `--metadata`, `--compression`, `--verbose`.
+  По умолчанию RGBA сохраняется без заливки.
+- 2D-центр после Lensdist проверен калибровочной сеткой 7×3: модель
+  `q=((x-W/2)/W,(y-H/2)/H)`, `factor=(1+d)/(1+4d|q|²)`,
+  `p'=center+(p-center)·factor`; расхождение центроидов ≤ 1.2 px.
+- `render_reference.py` принудительно передаёт белую заливку, поэтому
+  эталонный кадр не стал прозрачным.
+- Проверки: `check_liquid.py` проходит; временные рендеры `render_tube()`
+  и `render_ring()` (N=1, θ=10°) дали `v12901`, маркеры совпали с
+  проекцией; синтетический тест постобработки проверил fill on/off,
+  alpha bbox, `--height`, `--shift`, подписи и маркер.
+- Пока не сделаны: один процесс постобработки на серию, async и manifest.
+
 ### Документация — замеры производительности и сверка оценок времени
 - Добавлен `reports/performance.md`: поминутный расклад прогона 4.5
   (N=4, θ=10°), точное время `build_liquid`, сравнение fast/exact, вклад

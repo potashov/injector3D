@@ -293,6 +293,29 @@ def _meniscus_valid(mw, level_mm):
             and contact_m < spill_level_mm(mw) * MM - 1e-9)
 
 
+def contact_level_mm(mw, level_mm):
+    """Мировой z кромки контакта жидкости со стенкой.
+
+    Для полного эллиптического среза это `level + rise`; при плоском
+    fallback (у дна/перелива) кромка совпадает с уровнем.
+    """
+    if _meniscus_valid(mw, level_mm):
+        return level_mm + meniscus_wall_rise_mm()
+    return level_mm
+
+
+def contact_center_mm(mw, level_mm):
+    """Центр эллипса кромки контакта в мировых координатах, мм.
+
+    Большая/малая оси не нужны: для подписи и 2D-маркера достаточно
+    пересечения оси трубки с плоскостью кромки.
+    """
+    h_mm = contact_level_mm(mw, level_mm)
+    z_local = (h_mm * MM - mw[2][3]) / mw[2][2]
+    p = mw @ Vector((0.0, 0.0, z_local))
+    return (p.x / MM, p.y / MM, p.z / MM)
+
+
 def _template_key(mw, segments, rings):
     """Ключ шаблона: ориентация + дискретизация."""
     return (
