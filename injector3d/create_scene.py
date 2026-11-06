@@ -260,6 +260,7 @@ def main():
     n_tilt = None
     angle_tilt = None
     fill_fraction = None
+    volume_mm3 = None
     gpu_index = None
     shard_index = 0
     shard_count = 1
@@ -284,6 +285,10 @@ def main():
             fill_fraction = float(tail[i + 1])
             i += 2
             continue
+        if arg == '--volume-mm3' and i + 1 < len(tail):
+            volume_mm3 = float(tail[i + 1])
+            i += 2
+            continue
         if arg == '--gpu-index' and i + 1 < len(tail):
             gpu_index = int(tail[i + 1])
             i += 2
@@ -306,10 +311,27 @@ def main():
             continue
         i += 1
     postprocess, overlay = parse_render_options(tail)
-    if fill_fraction is None:
-        fill_fraction = cfg.FILL_FRACTION
-    if not (0.0 < fill_fraction <= 1.0):
-        raise ValueError('fill-fraction должен быть в диапазоне (0, 1]')
+    if fill_fraction is not None and volume_mm3 is not None:
+        raise SystemExit(
+            'Ошибка: --fill-fraction и --volume-mm3 взаимоисключающие'
+        )
+    capacity = capacity_mm3()
+    if volume_mm3 is not None:
+        if volume_mm3 <= 0.0:
+            raise SystemExit('Ошибка: --volume-mm3 должен быть больше 0')
+        if volume_mm3 > capacity + 1e-9:
+            raise SystemExit(
+                f'Ошибка: объём {volume_mm3:.2f} мм³ больше вместимости '
+                f'трубки {capacity:.2f} мм³'
+            )
+        target_mm3 = volume_mm3
+        fill_fraction = volume_mm3 / capacity
+    else:
+        if fill_fraction is None:
+            fill_fraction = cfg.FILL_FRACTION
+        if not (0.0 < fill_fraction <= 1.0):
+            raise ValueError('fill-fraction должен быть в диапазоне (0, 1]')
+        target_mm3 = target_volume_mm3(fill_fraction)
     if shard_count < 1 or not (0 <= shard_index < shard_count):
         raise ValueError('нужно 0 <= shard-index < shard-count')
 
@@ -349,9 +371,8 @@ def main():
     if not with_liquid:
         print("   ⏭  Пропущено: жидкость подключается с пункта 2")
     else:
-        target_mm3 = target_volume_mm3(fill_fraction)
         liquid = create_liquid("Liquid")
-        print(f"   Вместимость полости: {capacity_mm3():.2f} мм³, "
+        print(f"   Вместимость полости: {capacity:.2f} мм³, "
               f"цель {fill_fraction * 100:.0f}% = {target_mm3:.2f} мм³")
 
         if with_materials:

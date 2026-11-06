@@ -13,6 +13,7 @@
 | Флаг | Смысл |
 |------|-------|
 | `--fill-fraction F` | доля вместимости, `0 < F <= 1`; по умолчанию `FILL_FRACTION` |
+| `--volume-mm3 V` | абсолютный объём в мм³, `0 < V <= capacity_mm3()`; взаимоисключающий с `--fill-fraction` |
 | `--gpu-index I` | включить только I-й дискретный CUDA-GPU (0-based) |
 | `--shard-index K` | индекс шарда, `0 <= K < M` |
 | `--shard-count M` | число шардов; вертикаль достаётся шарду 0, наклонные распределяются по `index % M` |
@@ -29,7 +30,15 @@ $BL --background --python injector3d/create_scene.py -- 4.5 \
     --tilt-count 8 --tilt-angle 10 --fill-fraction 0.4 \
     --shard-index 1 --shard-count 2 --gpu-index 1 \
     --timestamp 20261106_230000
+
+# Абсолютный объём 11000 мм³
+$BL --background --python injector3d/create_scene.py -- 4.5 \
+    --tilt-count 8 --tilt-angle 10 --volume-mm3 11000
 ```
+
+`--volume-mm3` проверяется по `capacity_mm3()` из параметров трубки в
+`config.py`; при превышении вместимости выводится ошибка и запуск
+прерывается. `--fill-fraction` и `--volume-mm3` нельзя задавать вместе.
 
 `--gpu-index` фильтрует устройства после `GPU_DEVICE_FILTER`; индекс
 печатается в логе (`Включён GPU[1]: ...`). Если CUDA-устройств нет,

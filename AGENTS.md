@@ -167,8 +167,9 @@ $BL --background --python injector3d/create_scene.py -- 4.5 --tilt-count 8 --til
 
 ## Пункт 6 — CLI и параллельный рендер — ЧАСТИЧНО РЕАЛИЗОВАН
 
-- `create_scene.py` принимает `--fill-fraction`, `--gpu-index`,
-  `--shard-index/--shard-count`, `--timestamp`, `--tag`.
+- `create_scene.py` принимает `--fill-fraction` или взаимоисключающий
+  `--volume-mm3` (абсолютный объём, проверяется по `capacity_mm3()`),
+  `--gpu-index`, `--shard-index/--shard-count`, `--timestamp`, `--tag`.
 - `render_parallel.py` (системный `python3`) делит N наклонных кадров
   между GPU, запускает по процессу Blender на GPU и сливает manifest
   шардов; вертикаль рендерит только шард 0. Логи —

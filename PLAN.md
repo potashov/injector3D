@@ -117,8 +117,9 @@
   статус — `reports/step5_postprocessing.md`
 
 ### 🔄 6. CLI-обвязка — ЧАСТИЧНО РЕАЛИЗОВАНА
-- ✅ Параметры: `--fill-fraction`, `--tilt-count`, `--tilt-angle`,
-  `--gpu-index`, `--shard-index/--shard-count`, `--timestamp`, `--tag`.
+- ✅ Параметры: `--fill-fraction` или `--volume-mm3`, `--tilt-count`,
+  `--tilt-angle`, `--gpu-index`, `--shard-index/--shard-count`,
+  `--timestamp`, `--tag`.
 - ✅ Параллельный рендер одной серии по GPU:
   `render_parallel.py` делит азимуты, запускает Blender на каждый GPU
   и сливает manifest.

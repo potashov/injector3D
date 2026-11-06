@@ -49,7 +49,8 @@
 - `check_postprocess.py` — автономные проверки без Blender: alpha bbox,
   пересчёт raw→финальный центр, RGBA/shift, fill/height, маркер, batch
   namespace и result JSON.
-- `create_scene.py`: `--fill-fraction`, `--gpu-index`,
+- `create_scene.py`: `--fill-fraction` или взаимоисключающий
+  `--volume-mm3` (мм³, с проверкой по `capacity_mm3()`), `--gpu-index`,
   `--shard-index/--shard-count`, `--timestamp`, `--tag`. Вертикаль
   рендерит шард 0, наклонные делятся по `index % count`.
 - `scene.setup_scene(gpu_index=...)` / `setup_render_devices(gpu_index)`
