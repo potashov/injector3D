@@ -32,7 +32,7 @@ from injector3d.liquid import (
     meniscus_wall_rise_mm,
     target_volume_mm3,
 )
-from injector3d.scene import setup_scene
+from injector3d.scene import setup_scene, attach_camera_to_tube
 from injector3d.render import render_tube, render_ring, tilt_matrix
 from injector3d import config as cfg
 from injector3d.config import (
@@ -275,17 +275,23 @@ def main():
             print("   ⏭  Материалы: подключаются с пункта 4")
 
         # Для пункта 4.5 строим два меша: upright и один наклонный.
-        # Наклонный меш считается для той же мировой матрицы трубки, которую
-        # подставит render_ring при φ = 0 (наклон вокруг точки опоры), и для
-        # остальных азимутов только поворачивается вокруг мировой Z.
+        # Камера привязывается к трубке ЗДЕСЬ, на этапе вертикальной сцены,
+        # поэтому в цикле рендера достаточно менять tube.matrix_world:
+        # положение, наведение и ракурс камеры пересчитываются Blender'ом
+        # сами, трубка и камера всегда остаются одной системой.
         if is_ring:
             n = n_tilt if n_tilt is not None else cfg.TILT_AZIMUTH_COUNT
             angle = angle_tilt if angle_tilt is not None else cfg.TILT_ANGLE_DEG
             print(f"   Серия наклонов: N={n}, θ={angle}°")
 
-            # 1) upright-меш: трубка вертикальна
+            # 0) Трубка вертикальна -> привязка камеры. matrix_world трубки
+            #    единична, поэтому matrix_parent_inverse тоже единичен и
+            #    камера повторяет любой последующий поворот трубки.
             tube.matrix_world = Matrix.Identity(4)
             bpy.context.view_layer.update()
+            attach_camera_to_tube(camera, tube)
+
+            # 1) upright-меш: трубка вертикальна
             info_up = build_liquid(liquid, tube, target_mm3, use_fast=True)
             liquid_upright = _dup_mesh_object(liquid)
             liquid_upright.name = "Liquid_upright"
@@ -297,8 +303,8 @@ def main():
             liquid_tilted = _dup_mesh_object(liquid)
             liquid_tilted.name = "Liquid_tilted"
 
-            # 3) Трубка обратно вертикально; камера в серии не дочерняя ей,
-            #    её ставит render_ring._place_camera (наведение на опору).
+            # 3) Трубка обратно вертикально. Камера остаётся дочерней:
+            #    в рендере меняем только tube.matrix_world.
             tube.matrix_world = Matrix.Identity(4)
             bpy.context.view_layer.update()
 
@@ -341,7 +347,7 @@ def main():
         n = n_tilt if n_tilt is not None else cfg.TILT_AZIMUTH_COUNT
         angle = angle_tilt if angle_tilt is not None else cfg.TILT_ANGLE_DEG
         print(f"5/5  Рендер N+1 ({n + 1} кадров, θ={angle}°)...")
-        render_ring(tube, camera, liquid_upright, liquid_tilted,
+        render_ring(tube, liquid_upright, liquid_tilted,
                     step=step, n=n, angle=angle)
     else:
         print(f"5/5  Рендер под 5 углами (пункт {step})...")
