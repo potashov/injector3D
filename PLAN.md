@@ -37,7 +37,7 @@
 ### ✅ 4. Материалы — ЗАВЕРШЁН
 - `injector3d/materials.py`
   - Plastic: Principled BSDF, Transmission 1.0, IOR 1.49, Roughness 0.0
-  - Liquid: Principled BSDF (IOR 1.33) + Volume Absorption (Color 0.8/0.9/1.0, Density 0.5)
+  - Liquid: Principled BSDF (IOR 1.33) + Volume Absorption (Color 0.8/0.9/1.0, Density 20.0)
 - `injector3d/liquid.py` — меш жидкости с зазором 20 мкм, расчёт объёма
   (позже дополнен мировым горизонтом и мениском — см. пункты 2–3)
 - 5 рендеров: `output/4/4_<ракурс>_<timestamp>.png`
@@ -91,8 +91,6 @@
 - `check_liquid.py` — проверка fast-пути: ΔV ≤ 0.001 мм³, Δh ≤ 0.0001.
 
 ### ⏳ 5. Детальная проработка кадров
-
-### ⏳ 5. Детальная проработка кадров
 - Свет: 3-4 источника (key, fill, rim), возможно HDRI
 - Фон: однотонный или градиент
 - Камера: настройка фокусного расстояния, позиции, фокуса
@@ -143,7 +141,6 @@ render_reference.py   # Кадр под референс 06120
 postprocess_reference.py  # Белый фон, масштаб/сдвиг (опционально)
 calib_world.py        # Подбор WORLD_STRENGTH по сетке прогонов
 output/               # Рендеры
-output/4.5/           # Будущая серия N+1 (п. 4.5)
 output/06120/         # Кадры под референс 06120
 reports/              # Отчёты
 reports/step4.5.md    # Подробный план N+1 и оптимизаций жидкости

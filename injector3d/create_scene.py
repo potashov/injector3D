@@ -350,7 +350,7 @@ def main():
                   f"объём {info['volume_mm3']:.2f} мм³")
             if with_materials:
                 print(f"   ✅ Жидкость: {liquid.data.materials[0].name} "
-                      "(IOR=1.33, absorption density=0.5)")
+                      "(IOR=1.33, absorption density=20.0)")
             validate_liquid(liquid, target_mm3, info)
     print("   ✅ Готово.\n")
 
