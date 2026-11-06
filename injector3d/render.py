@@ -327,7 +327,8 @@ def _frame_metadata(volume_mm3, azimuth_deg, tilt_deg, center_mm, scene):
 def _center_for_info(tube, info):
     if not info or info.get('level_mm') is None:
         return None
-    return contact_center_mm(tube.matrix_world, info['level_mm'])
+    return contact_center_mm(tube.matrix_world, info['level_mm'],
+                             flat=info.get('flat', False))
 
 
 def render_tube(tube, camera, step='1', on_tilt=None,

@@ -21,8 +21,11 @@
 import math
 import os
 import sys
+from types import SimpleNamespace
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+import bpy
 
 from mathutils import Euler, Vector
 
@@ -121,6 +124,28 @@ def main():
                   f"{frac*100:4.0f}%: уровень {level:7.3f} мм, "
                   f"V={v:9.2f} (цель {target_volume_mm3(frac):8.2f}), "
                   f"non-manifold={len(bad)}, spilled={spilled}")
+
+    # 4b. Разрыв между плоским fallback и полным мениском у дна.
+    #     Для 2000 мм³ при 50° бисекция без fallback возвращает меш,
+    #     объём которого отличается от целевого на ~12 %.
+    print("\n4b. Переходный объём у дна (плоский fallback)")
+    from injector3d.liquid import build_liquid, create_liquid
+    obj = create_liquid("CheckLiquid_Fallback")
+    try:
+        for tilt in (50.0, 60.0):
+            mw = matrix_for(tilt_deg_y=tilt)
+            info = build_liquid(
+                obj, SimpleNamespace(matrix_world=mw), 2000.0, use_fast=True)
+            diff = abs(info['volume_mm3'] - 2000.0)
+            # На 50° цель попадает ровно в разрыв: обязан сработать
+            # принудительный плоский fallback.  На 60° хватает обычного.
+            good = diff < 0.05 and (tilt != 50.0 or info['flat'])
+            ok &= good
+            print(f"  {'OK ' if good else 'FAIL'} θ={tilt:4.1f}°: "
+                  f"V={info['volume_mm3']:.2f} (Δ={diff:.3f}), "
+                  f"flat={info['flat']}, level={info['level_mm']:.3f}")
+    finally:
+        bpy.data.objects.remove(obj, do_unlink=True)
 
     # 5. Порог перелива: выше нижней точки кромки объём не растёт
     print("\n5. Перелив через край")

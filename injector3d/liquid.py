@@ -293,24 +293,26 @@ def _meniscus_valid(mw, level_mm):
             and contact_m < spill_level_mm(mw) * MM - 1e-9)
 
 
-def contact_level_mm(mw, level_mm):
+def contact_level_mm(mw, level_mm, flat=False):
     """Мировой z кромки контакта жидкости со стенкой.
 
     Для полного эллиптического среза это `level + rise`; при плоском
-    fallback (у дна/перелива) кромка совпадает с уровнем.
+    fallback (у дна/перелива) кромка совпадает с уровнем.  `flat=True`
+    заставляет считать поверхность плоской даже там, где мениск
+    формально помещается (переходный объём у дна).
     """
-    if _meniscus_valid(mw, level_mm):
+    if not flat and _meniscus_valid(mw, level_mm):
         return level_mm + meniscus_wall_rise_mm()
     return level_mm
 
 
-def contact_center_mm(mw, level_mm):
+def contact_center_mm(mw, level_mm, flat=False):
     """Центр эллипса кромки контакта в мировых координатах, мм.
 
     Большая/малая оси не нужны: для подписи и 2D-маркера достаточно
     пересечения оси трубки с плоскостью кромки.
     """
-    h_mm = contact_level_mm(mw, level_mm)
+    h_mm = contact_level_mm(mw, level_mm, flat)
     z_local = (h_mm * MM - mw[2][3]) / mw[2][2]
     p = mw @ Vector((0.0, 0.0, z_local))
     return (p.x / MM, p.y / MM, p.z / MM)
@@ -403,7 +405,8 @@ def solve_level_for_volume(mw, target_mm3,
                            tol_mm3=0.02, max_iter=48,
                            segments=REVOLVE_SEGMENTS,
                            fast=False,
-                           rings=MENISCUS_RINGS):
+                           rings=MENISCUS_RINGS,
+                           flat=False):
     """Бисекция мирового уровня по целевому объёму.
 
     При `fast=True` используется кэшированный шаблон мениска: объём
@@ -411,6 +414,10 @@ def solve_level_for_volume(mw, target_mm3,
     Это убирает пересборку мениска на каждой итерации бисекции.
     Вне полного эллиптического среза автоматически используется точный
     `volume_at_level()`.
+
+    При `flat=True` объём считается как плоское тело без мениска.  Это
+    нужно для перехода у дна, где между плоским fallback и мениском
+    есть разрыв по объёму.
 
     Returns
     -------
@@ -421,6 +428,13 @@ def solve_level_for_volume(mw, target_mm3,
     hi = spill_level_mm(mw)
 
     def volume_fn(level):
+        if flat:
+            bm = _build_flat_bmesh(mw, level, segments)
+            if bm is None:
+                return 0.0
+            vol = bm.calc_volume(signed=True) / (MM ** 3)
+            bm.free()
+            return vol
         if fast:
             return fast_volume_at_level(mw, level, segments, rings)
         return volume_at_level(mw, level, segments)
@@ -463,21 +477,44 @@ def build_liquid(obj, tube, target_mm3, segments=REVOLVE_SEGMENTS,
     (плоское тело + постоянная ΔV_under), а полный меш собирается один
     раз. Финальный объём возвращается по фактическому мешу.
 
+    У дна между плоским fallback и полным мениском есть разрыв объёма.
+    Если целевой объём попал в этот разрыв, строится плоская поверхность
+    с точным объёмом (`flat=True` в результате).
+
     Returns
     -------
-    dict с полями level_mm, volume_mm3, error_mm3, spilled, verts, faces.
+    dict с полями level_mm, volume_mm3, error_mm3, spilled, flat,
+    verts, faces.
     """
     mw = tube.matrix_world.copy()
     level, _solver_vol, spilled = solve_level_for_volume(
         mw, target_mm3, tol_mm3=0.02, segments=segments, fast=use_fast)
 
     bm = _liquid_bmesh(mw, level, segments)
-    me = obj.data
     if bm is None:
-        me.clear_geometry()
         vol = 0.0
     else:
         vol = bm.calc_volume(signed=True) / (MM ** 3)
+
+    flat = False
+    tol = max(0.05, 2e-4 * abs(target_mm3))
+    if not spilled and abs(vol - target_mm3) > tol:
+        if bm is not None:
+            bm.free()
+        level, _solver_vol, spilled = solve_level_for_volume(
+            mw, target_mm3, tol_mm3=0.02, segments=segments,
+            fast=False, flat=True)
+        bm = _build_flat_bmesh(mw, level, segments)
+        flat = True
+        if bm is None:
+            vol = 0.0
+        else:
+            vol = bm.calc_volume(signed=True) / (MM ** 3)
+
+    me = obj.data
+    if bm is None:
+        me.clear_geometry()
+    else:
         bm.to_mesh(me)
         bm.free()
     me.update()
@@ -488,6 +525,7 @@ def build_liquid(obj, tube, target_mm3, segments=REVOLVE_SEGMENTS,
         'volume_mm3': vol,
         'error_mm3': vol - target_mm3,
         'spilled': spilled,
+        'flat': flat,
         'verts': len(me.vertices),
         'faces': len(me.polygons),
     }
