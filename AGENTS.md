@@ -157,10 +157,16 @@ $BL --background --python injector3d/create_scene.py -- 4.5 --tilt-count 8 --til
   `bpy.context.preferences.addons['cycles'].preferences`, не `preferences.cycles`.
 - `MeshEdge.link_faces` и `Mesh.bound_box` в 4.3 недоступны — работать через
   `bmesh` (см. `validate_tube`).
-- В локальной сборке 5.2.3 OpenImageDenoise доступен; денуазинг всё равно
-  включается условно через `_safe_set` — в старых headless-сборках OIDN мог
-  отсутствовать и `use_denoising=True` ронял рендер с «Failed to denoise».
-  AgX и `AgX - Medium High Contrast` работают.
+- В локальной сборке 5.2.3 OpenImageDenoise доступен, но **денуазинг
+  выключен явно** (`use_denoising = False`): замер на az180 против эталона
+  512 spp показал, что OIDN размывает линию горизонта мениска в 6 раз
+  сильнее (MAE в полосе мениска 0.158 → 0.963) и стоит +56 % времени кадра.
+  Прежняя запись `bool(_safe_set(...))` была багом — денуазинг не включался
+  никогда; теперь это осознанный выбор, `denoiser` задаётся на случай
+  выборочного включения в п. 5. AgX и `AgX - Medium High Contrast` работают.
+- Тайл трассировки фиксирован: `use_auto_tile = False` + `config.TILE_SIZE
+  = 2048`. Авторасчёт Blender на 2× P1000 медленнее на 3–7 %, картинка при
+  этом побитово идентична. Разбор рычагов Cycles — `reports/performance.md` §9.
 - CUDA включается для дискретных NVIDIA (`config.GPU_DEVICE_FILTER`); если
   GPU нет — обязателен fallback `cycles.device = 'CPU'`.
 - Стартовые `WARNING OptiX initialization failed (7804)` и

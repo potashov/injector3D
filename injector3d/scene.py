@@ -24,6 +24,7 @@ from .config import (
     LIGHTS,
     WORLD_COLOR,
     WORLD_STRENGTH,
+    TILE_SIZE,
 )
 
 
@@ -100,14 +101,26 @@ def setup_scene():
     # на GPU это снимает перестройку сцены перед каждым кадром.
     sc.render.use_persistent_data = True
 
-    # Денойзер и tone-mapping (могут быть недоступны в headless-сборке).
-    # Если OIDN недоступен, денуазинг обязательно выключаем: иначе
-    # bpy.ops.render.render() падает с «Failed to denoise».
-    denoiser_ok = _safe_set(sc.cycles, 'denoiser', DENOISER)
-    sc.cycles.use_denoising = bool(denoiser_ok)
+    # Денуазинг выключен сознательно, а не «потому что OIDN недоступен».
+    # Замер на самом сложном кадре серии (az180, эталон — 512 сэмплов):
+    # OpenImageDenoise сглаживает зерно (шум 3.48 -> 1.50), но размывает
+    # линию горизонта мениска в 6 раз сильнее (MAE в полосе мениска
+    # 0.158 -> 0.963) и стоит +56 % времени кадра. Мениск — предмет
+    # проекта, поэтому гладкость ценой размытого горизонта невыгодна.
+    # Сам `denoiser` задаём: он нужен, если п. 5 решит включать OIDN
+    # выборочно (например, для кадров без видимого горизонта).
+    _safe_set(sc.cycles, 'denoiser', DENOISER)
+    sc.cycles.use_denoising = False
 
     _safe_set(sc.view_settings, 'view_transform', VIEW_TRANSFORM)
     _safe_set(sc.view_settings, 'look', VIEW_LOOK)
+
+    # Явный размер тайла Cycles — ускоряет рендер на 2× GPU без потери
+    # качества (замер az180: 12.60 с против 13.64 с при auto-tile, MAE к
+    # эталону 512 spp совпадает). Auto-tile обязан быть выключен, иначе
+    # Cycles не смотрит на tile_size. Атрибуты есть не во всех сборках.
+    if _safe_set(sc.cycles, 'use_auto_tile', False):
+        _safe_set(sc.cycles, 'tile_size', TILE_SIZE)
 
     # Камера: та же оптика и ракурс, что у референса 06120
     p = SCENE_CAMERA
