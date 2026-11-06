@@ -18,8 +18,14 @@ $BL --background --python injector3d/create_scene.py -- 4
 # Кадр под референс 06120 (1200×1200, белый фон, сдвиг вправо 105 px)
 $BL --background --python render_reference.py
 
-# Числовая самопроверка жидкости (единственный автотест в репозитории)
+# Числовая самопроверка жидкости
 $BL --background --python check_liquid.py
+
+# Проверки постобработки (системный python3, без Blender)
+python3 check_postprocess.py
+
+# Параллельный рендер серии по GPU (системный python3)
+python3 render_parallel.py 4.5 --tilt-count 8 --tilt-angle 10 --gpus 0,1
 
 # Диагностика CUDA/GPU
 $BL --background --python check_cuda.py
@@ -27,8 +33,9 @@ $BL --background --python check_build_cuda.py
 $BL --background --python gpu_info.py
 ```
 
-Тестового фреймворка, линтера и typecheck нет — проверка = успешный прогон
-`check_liquid.py` (assert'ы + код возврата) и рендер без исключений.
+Тестового фреймворка, линтера и typecheck нет — проверка = успешные
+прогоны `check_liquid.py` и `check_postprocess.py` (assert'ы + код
+возврата) и рендер без исключений.
 
 ## Версия Blender — проверить первой
 
@@ -57,7 +64,9 @@ $BL --background --python gpu_info.py
   профиль считается для радиуса меша `INNER_RADIUS - CLEARANCE` и
   кэшируется в `liquid._MENISCUS_CACHE`.
 - `check_liquid.py` проверяет V(θ)=const, объём с мениском, горизонтальность
-  кромки и manifold на краевых случаях; это единственный автотест.
+  кромки и manifold на краевых случаях.
+- `check_postprocess.py` — автономные проверки постобработки: alpha bbox,
+  финальный 2D-центр, fill/height, маркер и result JSON.
 - `injector3d/scene.py` — камера из `config.SCENE_CAMERA` (та же, что
   `REFERENCE_CAMERA`): ручной track + roll +1.5°, 1.3 мм, f/2.8.
   `attach_camera_to_tube()` жёстко родит камеру к трубке — вызывается для
@@ -152,8 +161,27 @@ $BL --background --python injector3d/create_scene.py -- 4.5 --tilt-count 8 --til
   проверено на калибровочной сетке, расхождение ≤ 1.2 px.
 - `postprocess_reference.py` пересчитывает `x+shift`, `y·scale` и рисует
   маркер/блок; fill по умолчанию выключен, RGBA сохраняется.
-- Пока не сделаны: композиторный путь без overlay и отдельный скрипт
-  проверок; manifest содержит raw-2D-центр, финальный в него не пишется.
+- Manifest содержит raw- и финальный 2D-центр; `check_postprocess.py`
+  проверяет пересчёт и overlay. Композиторный путь без overlay отложен:
+  async-worker скрывает Python за рендером следующего кадра.
+
+## Пункт 6 — CLI и параллельный рендер — ЧАСТИЧНО РЕАЛИЗОВАН
+
+- `create_scene.py` принимает `--fill-fraction`, `--gpu-index`,
+  `--shard-index/--shard-count`, `--timestamp`, `--tag`.
+- `render_parallel.py` (системный `python3`) делит N наклонных кадров
+  между GPU, запускает по процессу Blender на GPU и сливает manifest
+  шардов; вертикаль рендерит только шард 0. Логи —
+  `output/<step>/<step>_shard<k>_<ts>.log`, master `.blend` получает
+  суффикс `_s<k>of<M>`.
+- Замер на 2× P1000: N=4 ×1.10, N=8 ×1.08, а не ~×1.8. Оба GPU уже
+  работают внутри одного кадра; launcher — для изоляции шардов/пакетных
+  запусков, не основной рычаг скорости. См. `reports/performance.md` §9.5.
+- `scene.setup_scene(gpu_index=...)` оставляет одно CUDA-устройство;
+  без индекса включает все, без CUDA — CPU-fallback.
+- Пока не сделаны `.glb`-экспорт, выбор типа жидкости, произвольный угол
+  камеры и пакетный рендер разных наборов параметров. План и замеры —
+  `reports/step6_cli.md`.
 
 ## Стадии и артефакты
 

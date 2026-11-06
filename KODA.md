@@ -56,8 +56,14 @@ $BL --background --python injector3d/create_scene.py -- 4
 # Кадр под референс 06120 (1200×1200, белый фон, сдвиг вправо 105 px)
 $BL --background --python render_reference.py
 
-# Числовая самопроверка жидкости (единственный автотест)
+# Числовая самопроверка жидкости
 $BL --background --python check_liquid.py
+
+# Проверки постобработки (системный python3)
+python3 check_postprocess.py
+
+# Параллельный рендер серии по GPU (системный python3)
+python3 render_parallel.py 4.5 --tilt-count 8 --tilt-angle 10 --gpus 0,1
 
 # Диагностика CUDA / GPU
 $BL --background --python check_cuda.py
@@ -71,8 +77,9 @@ $BL --background --python gpu_info.py
 
 ### Проверка
 
-Тестового фреймворка нет. Проверка = успешный прогон
-`check_liquid.py` (assert'ы + код возврата) и рендер без исключений.
+Тестового фреймворка нет. Проверка = успешные прогоны
+`check_liquid.py` и `check_postprocess.py` (assert'ы + код возврата) и
+рендер без исключений.
 
 ---
 
@@ -92,7 +99,9 @@ injector3d/
 
 render_reference.py      # Одиночный кадр под 06120.png
 postprocess_reference.py # Опциональная заливка, масштаб/сдвиг, подписи
+render_parallel.py       # Параллельный рендер по GPU + merge manifest
 check_liquid.py          # Числовая самопроверка объёма и уровня
+check_postprocess.py     # Проверки постобработки без Blender
 check_cuda.py            # Диагностика доступности CUDA
 check_build_cuda.py      # Проверка поддержки CUDA в сборке Blender
 calib_world.py           # Подбор WORLD_STRENGTH по сетке прогонов

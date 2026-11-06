@@ -183,6 +183,18 @@ def _process(raw_path, final_path, args, meta=None):
         save_kwargs['optimize'] = False
     final.save(final_path, **save_kwargs)
 
+    result_path = getattr(args, 'result', None)
+    if result_path:
+        result = {
+            'final': final_path,
+            'scale': scale,
+            'shift': shift,
+            'raw_height_px': raw_h,
+            'ellipse_center_2d_px': meta.get('ellipse_center_2d_px'),
+        }
+        with open(result_path, 'w', encoding='utf-8') as fh:
+            json.dump(result, fh, ensure_ascii=False)
+
     if args.verbose:
         result_bbox = _alpha_bbox(final)
         print(f'  raw tube height: {raw_h}px')
@@ -211,6 +223,7 @@ def _batch_namespace(job, opts):
         compression=int(job.get('compression',
                                 opts.get('compression', 3))),
         verbose=bool(job.get('verbose', opts.get('diagnostics', False))),
+        result=job.get('result'),
     )
 
 
@@ -264,6 +277,8 @@ def main():
     parser.add_argument('--fill-color', default='255,255,255,255')
     parser.add_argument('--metadata', default=None,
                         help='JSON с объёмом, азимутом, углом и центром')
+    parser.add_argument('--result', default=None,
+                        help='JSON для итогового 2D-центра и масштаба')
     parser.add_argument('--compression', type=int, default=3)
     parser.add_argument('--verbose', action='store_true')
     args = parser.parse_args()

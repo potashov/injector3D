@@ -256,25 +256,62 @@ def main():
     """Точка входа."""
     step = parse_step()
 
-    # Разбираем CLI-параметры пунктов 4.5 и 5
+    # Разбираем CLI-параметры пунктов 4.5–6
     n_tilt = None
     angle_tilt = None
+    fill_fraction = None
+    gpu_index = None
+    shard_index = 0
+    shard_count = 1
+    timestamp = None
+    tag = None
     argv = sys.argv
     tail = []
     if "--" in argv:
         tail = argv[argv.index("--") + 1:]
     i = 0
     while i < len(tail):
-        if tail[i] == '--tilt-count' and i + 1 < len(tail):
+        arg = tail[i]
+        if arg == '--tilt-count' and i + 1 < len(tail):
             n_tilt = int(tail[i + 1])
             i += 2
             continue
-        if tail[i] == '--tilt-angle' and i + 1 < len(tail):
+        if arg == '--tilt-angle' and i + 1 < len(tail):
             angle_tilt = float(tail[i + 1])
+            i += 2
+            continue
+        if arg == '--fill-fraction' and i + 1 < len(tail):
+            fill_fraction = float(tail[i + 1])
+            i += 2
+            continue
+        if arg == '--gpu-index' and i + 1 < len(tail):
+            gpu_index = int(tail[i + 1])
+            i += 2
+            continue
+        if arg == '--shard-index' and i + 1 < len(tail):
+            shard_index = int(tail[i + 1])
+            i += 2
+            continue
+        if arg == '--shard-count' and i + 1 < len(tail):
+            shard_count = int(tail[i + 1])
+            i += 2
+            continue
+        if arg == '--timestamp' and i + 1 < len(tail):
+            timestamp = tail[i + 1]
+            i += 2
+            continue
+        if arg == '--tag' and i + 1 < len(tail):
+            tag = tail[i + 1]
             i += 2
             continue
         i += 1
     postprocess, overlay = parse_render_options(tail)
+    if fill_fraction is None:
+        fill_fraction = cfg.FILL_FRACTION
+    if not (0.0 < fill_fraction <= 1.0):
+        raise ValueError('fill-fraction должен быть в диапазоне (0, 1]')
+    if shard_count < 1 or not (0 <= shard_index < shard_count):
+        raise ValueError('нужно 0 <= shard-index < shard-count')
 
     # Жидкость с горизонтальным уровнем появляется с пункта 2, материалы —
     # с пункта 4: раньше рендер показывал бы то, чего на стадии ещё нет.
@@ -288,7 +325,7 @@ def main():
 
     # 1. Сцена
     print("1/5  Настройка сцены...")
-    camera = setup_scene()
+    camera = setup_scene(gpu_index=gpu_index)
     print("   ✅ Сцена готова.\n")
 
     # 2. Геометрия
@@ -312,7 +349,6 @@ def main():
     if not with_liquid:
         print("   ⏭  Пропущено: жидкость подключается с пункта 2")
     else:
-        fill_fraction = cfg.FILL_FRACTION
         target_mm3 = target_volume_mm3(fill_fraction)
         liquid = create_liquid("Liquid")
         print(f"   Вместимость полости: {capacity_mm3():.2f} мм³, "
@@ -404,11 +440,15 @@ def main():
         render_ring(tube, liquid_upright, liquid_tilted,
                     step=step, n=n, angle=angle,
                     info_upright=info_up, info_tilted=info_t,
-                    postprocess=postprocess, overlay=overlay)
+                    postprocess=postprocess, overlay=overlay,
+                    shard=((shard_index, shard_count)
+                           if shard_count > 1 else None),
+                    timestamp=timestamp, tag=tag)
     else:
         print(f"5/5  Рендер под 5 углами (пункт {step})...")
         render_tube(tube, camera, step=step, on_tilt=on_tilt,
-                    postprocess=postprocess, overlay=overlay)
+                    postprocess=postprocess, overlay=overlay,
+                    timestamp=timestamp, tag=tag)
     print("   ✅ Готово.\n")
 
     print(f"=== Пункт {step} завершён ===")

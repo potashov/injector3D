@@ -96,6 +96,9 @@ f/2.8. Они лежат в `config.REFERENCE_CAMERA`, а `config.SCENE_CAMERA`
 ```bash
 $BL --background --python injector3d/create_scene.py -- 4.5 --tilt-count 8 --tilt-angle 10
 # → output/4.5/4.5_<ракурс>_a10_n8_v<объём>_<YYYYMMDD_HHMMSS>.png
+
+# То же, но двумя процессами Blender по одному GPU на каждый
+python3 render_parallel.py 4.5 --tilt-count 8 --tilt-angle 10 --gpus 0,1
 ```
 
 Плоскости наклона: старт с `TILT_AZIMUTH_START_DEG = 270°`, шаг `-360°/N`.
@@ -127,7 +130,9 @@ injector3d/
 └── create_scene.py   # Entry-point
 render_reference.py   # Рендер кадра под референс 06120
 postprocess_reference.py  # Заливка (опц.), масштаб/сдвиг, подписи
+render_parallel.py    # Параллельный рендер серии по GPU + merge manifest
 check_liquid.py       # Числовая самопроверка объёма и уровня
+check_postprocess.py  # Проверки постобработки без Blender
 calib_world.py        # Подбор WORLD_STRENGTH по сетке прогонов
 check_cuda.py         # Диагностика доступности CUDA в сборке Blender
 gpu_info.py           # Список устройств рендера и их параметров
@@ -156,6 +161,9 @@ blender --background --python injector3d/create_scene.py -- 4
 
 ```bash
 blender --background --python check_liquid.py
+
+# Проверки постобработки (системный python3)
+python3 check_postprocess.py
 ```
 
 ## Состояние
@@ -169,7 +177,8 @@ blender --background --python check_liquid.py
 - ✅ Референс 06120 — камера/дисторсия, отчёт
   `reports/reference_camera_06120.md`, кадр `output/06120/`
 - 🔄 Пункт 5 — постобработка, опциональная заливка, подписи, `v<объём>`
-  в имени, 2D-центр и маркер; план и статус — `reports/step5_postprocessing.md`
+  в имени, 2D-центр, маркер, worker и manifest; проверки —
+  `check_postprocess.py`, отчёт — `reports/step5_postprocessing.md`
 - ✅ Основная серия переведена на камеру 06120: 1200×1200; фон
   опционален, `output/4/` перерендерен
 - ✅ Основная серия смещена вправо на +105 px как референс; трубка
@@ -180,6 +189,8 @@ blender --background --python check_liquid.py
   «воздух/жидкость» вырос на 67 %, яркость тела жидкости 145 против 137
   на реальном фото
 - ⏳ Пункт 5 — детальная проработка кадров (каустики, блики)
-- ⏳ Пункт 6 — CLI-обвязка
+- 🔄 Пункт 6 — CLI: `--fill-fraction`, `--gpu-index`, шарды и
+  `render_parallel.py`; остались `.glb`, тип жидкости, угол камеры и
+  пакетные наборы параметров — `reports/step6_cli.md`
 - ⏳ Пункт 7 — финальные тестовые рендеры
 - ⏳ Пункт 8 — капли на внутренней стенке трубки

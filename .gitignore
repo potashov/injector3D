@@ -8,6 +8,7 @@ __pycache__/
 # запуском скрипта.  Сами рендеры (PNG) — результат работы, они в репозитории.
 output/**/*.blend
 output/**/*.blend1
+output/**/*.log
 
 # Локальные настройки Blender
 *.blend1

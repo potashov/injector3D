@@ -139,6 +139,10 @@ def _start_postprocess_worker(opts):
 
 
 def _submit_postprocess(worker, job, opts):
+    fd, result_path = tempfile.mkstemp(
+        prefix='injector3d_result_', suffix='.json')
+    os.close(fd)
+    job['result'] = result_path
     payload = {'postprocess': opts, 'job': job}
     worker.stdin.write(json.dumps(payload, ensure_ascii=False) + '\n')
     worker.stdin.flush()
@@ -151,6 +155,21 @@ def _finish_postprocess_worker(worker, jobs):
         raise subprocess.CalledProcessError(
             code, 'postprocess_reference.py --worker')
     for job in jobs:
+        result_path = job.get('result')
+        if result_path:
+            try:
+                with open(result_path, 'r', encoding='utf-8') as fh:
+                    result = json.load(fh)
+                center = result.get('ellipse_center_2d_px')
+                if center is not None:
+                    job['metadata']['ellipse_center_2d_px'] = center
+            except (OSError, ValueError):
+                print(f'  ! Нет результата постобработки: {result_path}')
+            finally:
+                try:
+                    os.remove(result_path)
+                except FileNotFoundError:
+                    pass
         try:
             os.remove(job['raw'])
         except FileNotFoundError:
@@ -231,6 +250,9 @@ def _render_one(scene, final_path, variant_name, metadata=None,
            ('volume', 'azimuth', 'tilt_deg', 'ellipse_center',
             'center_marker')):
         print('  ! Постобработка выключена — подписи/маркер пропущены')
+    raw_center = meta.get('ellipse_center_2d_raw_px')
+    if raw_center is not None:
+        meta['ellipse_center_2d_px'] = list(raw_center)
     scene.render.filepath = final_path
     bpy.ops.render.render(write_still=True)
     print(f'  Рендер: {variant_name} -> {os.path.basename(final_path)}')
@@ -309,7 +331,7 @@ def _center_for_info(tube, info):
 
 
 def render_tube(tube, camera, step='1', on_tilt=None,
-                postprocess=None, overlay=None):
+                postprocess=None, overlay=None, timestamp=None, tag=None):
     """Рендер трубки под каждым из TILT_VARIANTS.
 
     Parameters
@@ -326,7 +348,7 @@ def render_tube(tube, camera, step='1', on_tilt=None,
     postprocess, overlay : dict | None
         Настройки постобработки и подписей; None — значения из config.
     """
-    ts = time.strftime('%Y%m%d_%H%M%S')
+    ts = timestamp or time.strftime('%Y%m%d_%H%M%S')
     base = os.path.join(OUTPUT_DIR, step)
     os.makedirs(base, exist_ok=True)
 
@@ -354,7 +376,8 @@ def render_tube(tube, camera, step='1', on_tilt=None,
             meta = _frame_metadata(
                 volume, None, _tilt_deg_from_matrix(tube.matrix_world),
                 center, scene)
-            render_fname = _render_filename(step, variant_name, ts, volume)
+            render_fname = _render_filename(
+                step, variant_name, ts, volume, tag)
             final_path = os.path.join(base, render_fname)
 
             # Сохраняем .blend (историческое поведение render_tube)
@@ -375,7 +398,7 @@ def render_tube(tube, camera, step='1', on_tilt=None,
     finally:
         _stop_worker_quietly(worker)
 
-    _write_manifest(base, step, ts, None, results)
+    _write_manifest(base, step, ts, tag, results)
 
 
 def tilt_matrix(theta_rad, azimuth_deg):
@@ -396,7 +419,8 @@ def tilt_matrix(theta_rad, azimuth_deg):
 def render_ring(tube, liquid_upright, liquid_tilted,
                 step='4.5', n=4, angle=10.0,
                 info_upright=None, info_tilted=None,
-                postprocess=None, overlay=None):
+                postprocess=None, overlay=None, shard=None,
+                timestamp=None, tag=None):
     """Рендер N+1 кадров: вертикаль + N плоскостей наклона при угле `angle`.
 
     Камера — дочерняя трубке (привязка сделана в `create_scene` на этапе
@@ -408,10 +432,35 @@ def render_ring(tube, liquid_upright, liquid_tilted,
     горизонтален в мире и не должен наклоняться вместе с трубкой. Наклонный
     меш строится один раз при φ = 0 и для остальных φ поворачивается вокруг
     мировой Z.
+
+    `shard=(index, count)` оставляет кадры для одного процесса: вертикаль
+    достаётся shard 0, наклонные распределяются по `index % count`. Имена
+    master и manifest получают суффикс `_s<index>of<count>`, а финальные
+    PNG — нет, поэтому шарды не конфликтуют и серию можно слить.
     """
-    variants = tilt_ring_variants(n, angle)
-    tag = f'a{angle:g}_n{n}'
-    ts = time.strftime('%Y%m%d_%H%M%S')
+    all_variants = tilt_ring_variants(n, angle)
+    if shard is None:
+        variants = all_variants
+        shard_suffix = ''
+    else:
+        shard_index, shard_count = shard
+        if not (0 <= shard_index < shard_count):
+            raise ValueError('shard-index должен быть в 0..shard-count-1')
+        variants = []
+        tilted = 0
+        for name, azimuth in all_variants:
+            if azimuth is None:
+                if shard_index == 0:
+                    variants.append((name, azimuth))
+            else:
+                if tilted % shard_count == shard_index:
+                    variants.append((name, azimuth))
+                tilted += 1
+        shard_suffix = f'_s{shard_index}of{shard_count}'
+
+    geometric_tag = f'a{angle:g}_n{n}'
+    tag = f'{geometric_tag}_{tag}' if tag else geometric_tag
+    ts = timestamp or time.strftime('%Y%m%d_%H%M%S')
     base = os.path.join(OUTPUT_DIR, step)
     os.makedirs(base, exist_ok=True)
 
@@ -424,7 +473,7 @@ def render_ring(tube, liquid_upright, liquid_tilted,
     liquid_tilted.hide_render = True
     bpy.context.view_layer.update()
 
-    master_fname = f'{step}_master_{tag}_{ts}.blend'
+    master_fname = f'{step}_master_{tag}{shard_suffix}_{ts}.blend'
     master_path = os.path.join(base, master_fname)
     bpy.ops.wm.save_as_mainfile(filepath=master_path)
     print(f'  Сохранён master: {master_fname}')
@@ -470,7 +519,7 @@ def render_ring(tube, liquid_upright, liquid_tilted,
     finally:
         _stop_worker_quietly(worker)
 
-    _write_manifest(base, step, ts, tag, results)
+    _write_manifest(base, step, ts, tag + shard_suffix, results)
 
     # Оставляем сцену в вертикальном положении для сохранения/отладки.
     tube.matrix_world = Matrix.Identity(4)

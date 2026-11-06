@@ -39,8 +39,35 @@
 - Проверено временными прогонами `render_tube()` и `render_ring()`:
   один worker на серию, raw удаляются после обработки, manifest
   корректен; синтетический `--batch` на двух jobs также проходит.
-- Пока не сделаны: композиторный путь без overlay, запись финального 2D
-  центра в manifest и отдельный скрипт проверок.
+- Продолжение (финальный центр в manifest и `check_postprocess.py`) —
+  в записи «Пункт 6» ниже.
+
+### Добавлено — финальный 2D-центр, проверки и параллельный рендер (п. 5–6)
+- `postprocess_reference.py` пишет `--result` JSON: масштаб, сдвиг,
+  высоту трубки и финальный `ellipse_center_2d_px`; worker возвращает его
+  в manifest. Для `--no-postprocess` финальный центр равен raw.
+- `check_postprocess.py` — автономные проверки без Blender: alpha bbox,
+  пересчёт raw→финальный центр, RGBA/shift, fill/height, маркер, batch
+  namespace и result JSON.
+- `create_scene.py`: `--fill-fraction`, `--gpu-index`,
+  `--shard-index/--shard-count`, `--timestamp`, `--tag`. Вертикаль
+  рендерит шард 0, наклонные делятся по `index % count`.
+- `scene.setup_scene(gpu_index=...)` / `setup_render_devices(gpu_index)`
+  оставляют одно CUDA-устройство; индекс печатается в логе. Без CUDA
+  сохранён CPU-fallback.
+- `render_parallel.py`: запускает по процессу Blender на GPU, пишет
+  `output/<step>/<step>_shard<k>_<ts>.log`, затем сливает manifest
+  шардов в один (`shards` в JSON); master `.blend` получает
+  `_s<k>of<M>`, финальные PNG — нет.
+- Проверки: `check_postprocess.py` проходит; `--gpu-index 0/1` включает
+  разные P1000; два шарда N=2 (3 кадра) и N=1 (2 кадра) дали корректный
+  объединённый manifest; `--dry-run` показывает команды.
+- Замер: N=4 49.18 с (2 GPU) против 44.70 с (2 шарда) — ×1.10; N=8
+  111.37 с против 102.85 с — ×1.08. Ожидавшиеся ~×1.8 не подтвердились:
+  один GPU тратит на кадр ~23–25 с, два GPU в одном процессе — ~12 с.
+  `reports/performance.md` §9.5 и `reports/step6_cli.md` исправлены.
+- Пока не сделаны `.glb`, тип жидкости, произвольный угол камеры и
+  пакетный рендер разных наборов параметров — см. `reports/step6_cli.md`.
 
 ### Документация — замеры производительности и сверка оценок времени
 - Добавлен `reports/performance.md`: поминутный расклад прогона 4.5

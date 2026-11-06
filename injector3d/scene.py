@@ -41,32 +41,46 @@ def _safe_set(owner, attr, value):
         print(f"    ! {attr}={value!r} недоступен — пропущено")
 
 
-def setup_render_devices():
+def setup_render_devices(gpu_index=None):
     """Включает CUDA-устройства Cycles. Возвращает их количество.
 
     У Blender 4.3 нет `preferences.cycles`, доступ к настройкам Cycles
     идёт через словарь аддонов. get_devices_for_type('CUDA') возвращает
     и CPU-устройство Cycles, и iGPU — их отключаем, чтобы в рендере
     участвовали только дискретные карты.
+
+    `gpu_index` выбирает одно дискретное устройство по порядку Blender;
+    None — включить все. Индекс нужен для параллельного запуска двух
+    процессов Blender, по одному GPU на каждый.
     """
     prefs = bpy.context.preferences.addons['cycles'].preferences
     prefs.refresh_devices()
     prefs.compute_device_type = 'CUDA'
 
+    devices = prefs.get_devices_for_type('CUDA')
+    eligible = [device for device in devices
+                if any(vendor in device.name for vendor in GPU_DEVICE_FILTER)]
+    if gpu_index is not None and not (0 <= gpu_index < len(eligible)):
+        raise ValueError(
+            f"gpu-index {gpu_index} вне диапазона 0..{len(eligible) - 1}")
+
     gpus = 0
-    for device in prefs.get_devices_for_type('CUDA'):
-        if any(vendor in device.name for vendor in GPU_DEVICE_FILTER):
-            device.use = True
-            gpus += 1
-            print(f"    Включён GPU: {device.name}")
-        else:
-            device.use = False
+    index = 0
+    for device in devices:
+        is_gpu = any(vendor in device.name for vendor in GPU_DEVICE_FILTER)
+        use = is_gpu and (gpu_index is None or index == gpu_index)
+        device.use = use
+        if is_gpu:
+            if use:
+                gpus += 1
+                print(f"    Включён GPU[{index}]: {device.name}")
+            index += 1
     if not gpus:
         print("    ! CUDA-устройства не найдены — рендер на CPU")
     return gpus
 
 
-def setup_scene():
+def setup_scene(gpu_index=None):
     """Создаёт чистую сцену, настраивает Cycles, камеру, свет, фон."""
     bpy.ops.wm.read_factory_settings(use_empty=True)
 
@@ -78,7 +92,7 @@ def setup_scene():
     sc.render.engine = 'CYCLES'
     # Без активных GPU-устройств оставляем CPU: с device='GPU' и пустым
     # списком устройств Cycles отвечает «no compatible GPU device found».
-    sc.cycles.device = 'GPU' if setup_render_devices() else 'CPU'
+    sc.cycles.device = ('GPU' if setup_render_devices(gpu_index) else 'CPU')
     sc.cycles.samples = RENDER_SAMPLES
     sc.cycles.preview_samples = 32
     sc.cycles.caustics_reflective = True
