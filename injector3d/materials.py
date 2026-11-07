@@ -36,6 +36,14 @@ def create_material_plastic(name="Plastic"):
     bsdf.inputs["IOR"].default_value = IOR_PMMA
     bsdf.inputs["Roughness"].default_value = 0.0
     bsdf.inputs["Base Color"].default_value = (0.95, 0.95, 0.95, 1.0)
+    # Fresnel-параметры зафиксированы явно (в Blender 4.x сокет
+    # назывался 'Specular'). Для диэлектрика с Transmission=1.0 блик
+    # на поверхности — это френелевское отражение, управляемое IOR;
+    # 0.5 = стандартная шкала (F0 от IOR), 1.0 = нейтральный тон.
+    # Отличие от дефолтов только в том, что значения закреплены в коде
+    # и не поедут при смене пресетов Blender.
+    bsdf.inputs["Specular IOR Level"].default_value = 0.5
+    bsdf.inputs["Specular Tint"].default_value = (1.0, 1.0, 1.0, 1.0)
 
     # Material Output
     mout = nt.nodes.new("ShaderNodeOutputMaterial")
@@ -75,6 +83,12 @@ def create_material_liquid(name="Liquid", liquid_config=None):
     bsdf.inputs["IOR"].default_value = ior
     bsdf.inputs["Roughness"].default_value = 0.0
     bsdf.inputs["Base Color"].default_value = tint
+    # Fresnel-параметры: у границы воздух/вода блик тоже даёт
+    # френелевское отражение (F0 ≈ 2 % при IOR 1.33), а не отдельный
+    # зеркальный слой. Значения закреплены явно, чтобы не зависеть от
+    # пресетов сборки Blender.
+    bsdf.inputs["Specular IOR Level"].default_value = 0.5
+    bsdf.inputs["Specular Tint"].default_value = (1.0, 1.0, 1.0, 1.0)
 
     # Volume Absorption
     vol = nt.nodes.new("ShaderNodeVolumeAbsorption")

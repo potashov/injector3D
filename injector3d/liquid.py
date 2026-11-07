@@ -215,6 +215,9 @@ def _build_meniscus_bmesh(mw, level_mm, segments, rings=MENISCUS_RINGS,
         return bm
 
     # Центр эллипса среза — пересечение оси трубки с плоскостью контакта.
+    # Формула: mw[2][2] — проекция оси трубки на z_world, mw[2][3] — её
+    # смещение. Пересечение даёт локальный z, который переводится в мир:
+    #   z_local = (contact_m - mw[2][3]) / mw[2][2]
     center_local_z = (contact_m - mw[2][3]) / mw[2][2]
     center = mw @ Vector((0.0, 0.0, center_local_z))
     cx, cy = center.x, center.y
@@ -222,22 +225,51 @@ def _build_meniscus_bmesh(mw, level_mm, segments, rings=MENISCUS_RINGS,
 
     bmesh.ops.delete(bm, geom=cap_faces, context='FACES_ONLY')
 
-    n = len(boundary)
+    # Расстояние каждой грани кромки от центра эллипса (мм) — нужно
+    # для интерполяции мениска: чем ближе к стенке, тем выше подъём.
     dist_mm = [math.hypot(v.co.x - cx, v.co.y - cy) / MM
                for v in boundary]
+    # Центральный полюс — нижняя точка мениска (на оси трубки).
     center_v = bm.verts.new((cx, cy, level_mm * MM))
 
+    _meniscus_rings(bm, center_v=center_v, cx=cx, cy=cy,
+                    boundary=boundary, dist_mm=dist_mm,
+                    level_mm=level_mm, rings=rings,
+                    liquid_props=liquid_props)
+
+    bmesh.ops.recalc_face_normals(bm, faces=bm.faces)
+    if bm.calc_volume(signed=True) < 0:
+        bmesh.ops.reverse_faces(bm, faces=bm.faces)
+
+    return bm
+
+
+def _meniscus_rings(bm, center_v, cx, cy, boundary, dist_mm,
+                    level_mm, rings, liquid_props=None):
+    """Построение радиальной менисковой сетки поверх эллиптической кромки.
+
+    Создаёт `rings` концентрических колец вершин, где высота каждой
+    точки зависит от расстояния до стенки через `_meniscus_rise_mm()`.
+    Связывает кольца квадами, а центральную вершину — треугольниками.
+    """
+    n = len(boundary)
     ring_prev = None
+
     for k in range(1, rings):
-        s = k / rings
+        s = k / rings  # доля от центра к кромке
         ring = []
         for j, bv in enumerate(boundary):
+            # Линейная интерполяция от центра к грани кромки.
             px = cx + s * (bv.co.x - cx)
             py = cy + s * (bv.co.y - cy)
+            # Расстояние до стенки = (1-s) * расстояние_от_центра
             d_mm = (1.0 - s) * dist_mm[j]
+            # Высота = уровень + подъём мениска на данном расстоянии
             pz = (level_mm + _meniscus_rise_mm(d_mm, liquid_props)) * MM
             ring.append(bm.verts.new((px, py, pz)))
 
+        # Первое кольцо: треугольники от центрального полюса.
+        # Последующие: квады между соседними кольцами.
         if ring_prev is None:
             for j in range(n):
                 bm.faces.new((center_v, ring[j], ring[(j + 1) % n]))
@@ -248,7 +280,9 @@ def _build_meniscus_bmesh(mw, level_mm, segments, rings=MENISCUS_RINGS,
                               ring[jn], ring[j]))
         ring_prev = ring
 
+    # Финальное кольцо — грани между последним кольцом и кромкой.
     if ring_prev is None:
+        # Не должно случаться при rings >= 2 (MENISCUS_RINGS=80).
         for j in range(n):
             bm.faces.new((center_v, boundary[j], boundary[(j + 1) % n]))
     else:
@@ -256,12 +290,6 @@ def _build_meniscus_bmesh(mw, level_mm, segments, rings=MENISCUS_RINGS,
             jn = (j + 1) % n
             bm.faces.new((ring_prev[j], ring_prev[jn],
                           boundary[jn], boundary[j]))
-
-    bmesh.ops.recalc_face_normals(bm, faces=bm.faces)
-    if bm.calc_volume(signed=True) < 0:
-        bmesh.ops.reverse_faces(bm, faces=bm.faces)
-
-    return bm
 
 
 def _liquid_bmesh(mw, level_mm, segments, liquid_props=None):

@@ -249,8 +249,23 @@ def _dup_mesh_object(obj):
     return new_obj
 
 
-def main():
-    """Точка входа."""
+def _parse_cli(tail):
+    """Разбирает хвост argv (после `--`) в параметры прогона.
+
+    `argparse` здесь не подходит: Blender сам режет argv на `--`, а
+    `--export-glb` принимает путь факультативно. Неизвестные флаги
+    молча пропускаются — часть из них читает `parse_render_options()`
+    из того же хвоста.
+
+    Returns
+    -------
+    dict с ключами: mode, output_dir, n_tilt, angle_tilt, fill_fraction,
+    volume_mm3, gpu_index, shard_index, shard_count, timestamp, tag,
+    liquid_type, liquid_ior, liquid_density, surface_tension,
+    contact_angle, absorption_density, camera_preset, camera_distance,
+    camera_z, camera_target_z, camera_lens, camera_roll,
+    camera_distortion, export_glb_path.
+    """
     mode = 'ring'
     output_dir = None
 
@@ -281,10 +296,6 @@ def main():
 
     export_glb_path = None
 
-    argv = sys.argv
-    tail = []
-    if "--" in argv:
-        tail = argv[argv.index("--") + 1:]
     i = 0
     while i < len(tail):
         arg = tail[i]
@@ -393,6 +404,69 @@ def main():
                 i += 1
             continue
         i += 1
+
+    return {
+        'mode': mode,
+        'output_dir': output_dir,
+        'n_tilt': n_tilt,
+        'angle_tilt': angle_tilt,
+        'fill_fraction': fill_fraction,
+        'volume_mm3': volume_mm3,
+        'gpu_index': gpu_index,
+        'shard_index': shard_index,
+        'shard_count': shard_count,
+        'timestamp': timestamp,
+        'tag': tag,
+        'liquid_type': liquid_type,
+        'liquid_ior': liquid_ior,
+        'liquid_density': liquid_density,
+        'surface_tension': surface_tension,
+        'contact_angle': contact_angle,
+        'absorption_density': absorption_density,
+        'camera_preset': camera_preset,
+        'camera_distance': camera_distance,
+        'camera_z': camera_z,
+        'camera_target_z': camera_target_z,
+        'camera_lens': camera_lens,
+        'camera_roll': camera_roll,
+        'camera_distortion': camera_distortion,
+        'export_glb_path': export_glb_path,
+    }
+
+
+def main():
+    """Точка входа."""
+    argv = sys.argv
+    tail = []
+    if "--" in argv:
+        tail = argv[argv.index("--") + 1:]
+    opts = _parse_cli(tail)
+    mode = opts['mode']
+    output_dir = opts['output_dir']
+    n_tilt = opts['n_tilt']
+    angle_tilt = opts['angle_tilt']
+    fill_fraction = opts['fill_fraction']
+    volume_mm3 = opts['volume_mm3']
+    gpu_index = opts['gpu_index']
+    shard_index = opts['shard_index']
+    shard_count = opts['shard_count']
+    timestamp = opts['timestamp']
+    tag = opts['tag']
+    liquid_type = opts['liquid_type']
+    liquid_ior = opts['liquid_ior']
+    liquid_density = opts['liquid_density']
+    surface_tension = opts['surface_tension']
+    contact_angle = opts['contact_angle']
+    absorption_density = opts['absorption_density']
+    camera_preset = opts['camera_preset']
+    camera_distance = opts['camera_distance']
+    camera_z = opts['camera_z']
+    camera_target_z = opts['camera_target_z']
+    camera_lens = opts['camera_lens']
+    camera_roll = opts['camera_roll']
+    camera_distortion = opts['camera_distortion']
+    export_glb_path = opts['export_glb_path']
+
     postprocess, overlay = parse_render_options(tail)
 
     if mode not in RENDER_MODES:

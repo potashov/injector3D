@@ -14,6 +14,7 @@
 Каталог вывода: `<output_dir>/<YYYYMMDD_HHMM>/`.
 """
 
+import atexit
 import bpy
 import json
 import math
@@ -49,6 +50,44 @@ from .output_manager import (
     render_filename,
 )
 from .scene import attach_camera_to_tube
+
+
+# Временные файлы серии (JSON метаданных, JSON результатов, raw-кадры).
+# Штатно каждый удаляется по месту создания, но при прерывании прогона
+# (Ctrl+C, ошибка рендера) они оставались бы в /tmp до конца жизни ОС.
+# atexit чистит всё, что не было снято с учёта.
+_TEMP_FILES = set()
+
+
+def _register_temp(path):
+    _TEMP_FILES.add(path)
+    return path
+
+
+def _unregister_temp(path):
+    _TEMP_FILES.discard(path)
+
+
+def _remove_temp(path):
+    """Удаляет временный файл и снимает его с учёта (идемпотентно)."""
+    _unregister_temp(path)
+    try:
+        os.remove(path)
+    except OSError:
+        pass
+
+
+def _cleanup_temps():
+    """atexit-колбэк: удаляет всё, что не было удалено по месту создания."""
+    for path in sorted(_TEMP_FILES):
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+    _TEMP_FILES.clear()
+
+
+atexit.register(_cleanup_temps)
 
 
 def _configure_compositor(scene, distortion=None, fit=False):
@@ -116,6 +155,7 @@ def _write_metadata(metadata, overlay):
     """Пишет временный JSON для одиночной постобработки."""
     meta = _metadata_with_overlay(metadata, overlay)
     fd, path = tempfile.mkstemp(prefix='injector3d_meta_', suffix='.json')
+    _register_temp(path)
     with os.fdopen(fd, 'w', encoding='utf-8') as fh:
         json.dump(meta, fh, ensure_ascii=False)
     return path
@@ -148,7 +188,7 @@ def _postprocess(raw_path, final_path, metadata=None, postprocess=None,
     try:
         subprocess.run(cmd, check=True)
     finally:
-        os.remove(meta_path)
+        _remove_temp(meta_path)
 
 
 def _start_postprocess_worker(opts):
@@ -164,6 +204,7 @@ def _submit_postprocess(worker, job, opts):
     fd, result_path = tempfile.mkstemp(
         prefix='injector3d_result_', suffix='.json')
     os.close(fd)
+    _register_temp(result_path)
     job['result'] = result_path
     payload = {'postprocess': opts, 'job': job}
     worker.stdin.write(json.dumps(payload, ensure_ascii=False) + '\n')
@@ -188,14 +229,8 @@ def _finish_postprocess_worker(worker, jobs):
             except (OSError, ValueError):
                 print(f'  ! Нет результата постобработки: {result_path}')
             finally:
-                try:
-                    os.remove(result_path)
-                except FileNotFoundError:
-                    pass
-        try:
-            os.remove(job['raw'])
-        except FileNotFoundError:
-            pass
+                _remove_temp(result_path)
+        _remove_temp(job['raw'])
 
 
 def _stop_worker_quietly(worker):
@@ -262,6 +297,7 @@ def _render_one(scene, final_path, variant_name, metadata=None,
         fd, raw_path = tempfile.mkstemp(
             prefix=f'injector3d_{variant_name}_', suffix='_raw.png')
         os.close(fd)
+        _register_temp(raw_path)
         scene.render.filepath = raw_path
         bpy.ops.render.render(write_still=True)
         print(f'  Кадр: {variant_name} -> raw')

@@ -30,19 +30,12 @@ from .config import (
     SURFACE_TENSION,
     LIQUID_DENSITY,
     GRAVITY,
-    CONTACT_ANGLE_DEG,
     MENISCUS_STEPS,
 )
 
 # --- Параметры ---
 CAP_LAMBDA_MM = math.sqrt(
     SURFACE_TENSION / (LIQUID_DENSITY * GRAVITY)) * 1000.0  # мм
-CONTACT_ANGLE = math.radians(CONTACT_ANGLE_DEG)
-CTG = math.cos(CONTACT_ANGLE) / math.sin(CONTACT_ANGLE)
-COS = math.cos(CONTACT_ANGLE)
-
-# Аналитический объём мениска (механическое тождество)
-ANALYTIC_DELTA_V_MM3 = 2 * math.pi * CAP_LAMBDA_MM ** 2 * INNER_RADIUS * COS
 
 
 def _deriv_y(r, y, lambda_mm=CAP_LAMBDA_MM):

@@ -15,7 +15,6 @@ from .config import (
     SCENE_CAMERA,
     MAX_BOUNCES,
     CLAMP_INDIRECT,
-    RENDER_SAMPLES,
     RENDER_TIME_LIMIT_S,
     DENOISER,
     VIEW_TRANSFORM,
@@ -87,7 +86,10 @@ def setup_scene(gpu_index=None, camera_config=None):
     p = dict(camera_config or SCENE_CAMERA)
 
     # ---- Включаем аддон Cycles ----
-    addon_utils.enable('cycles', default_set=True)
+    # Включённые аддоны видны в preferences.addons; повторный enable()
+    # на уже активном аддоне шумит предупреждениями в лог.
+    if 'cycles' not in bpy.context.preferences.addons:
+        addon_utils.enable('cycles', default_set=True)
 
     # ---- Cycles ----
     sc = bpy.context.scene
@@ -95,7 +97,7 @@ def setup_scene(gpu_index=None, camera_config=None):
     # Без активных GPU-устройств оставляем CPU: с device='GPU' и пустым
     # списком устройств Cycles отвечает «no compatible GPU device found».
     sc.cycles.device = ('GPU' if setup_render_devices(gpu_index) else 'CPU')
-    sc.cycles.samples = p.get('samples', RENDER_SAMPLES)
+    sc.cycles.samples = p.get('samples', SCENE_CAMERA['samples'])
     sc.cycles.preview_samples = 32
     sc.cycles.caustics_reflective = True
     sc.cycles.caustics_refractive = True
@@ -186,9 +188,10 @@ def _setup_lighting():
     """Студийное освещение: 3 площади из config.LIGHTS.
 
     В Blender 4.3 AreaLight не имеет angle_x/angle_y — только size
-    и size_y. Углы облучения задаются через размер площади.
+    и size_y. Угол облучения в config.LIGHTS не хранится: его здесь
+    и задать нельзя, направленность даёт размер площади.
     """
-    for name, loc, energy, size, _angle in LIGHTS:
+    for name, loc, energy, size in LIGHTS:
         bpy.ops.object.light_add(type='AREA', location=loc)
         light = bpy.context.active_object
         light.name = name + '_Light'
