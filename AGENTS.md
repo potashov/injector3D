@@ -2,8 +2,7 @@
 
 Headless-Blender проект: генерирует 3D-сцену трубки с жидкостью и рендерит
 её под заданным числом ракурсов (N+1: вертикаль + N плоскостей наклона,
-п. 4.5). Это **не
-обычный Python-пакет**: модули импортируют `bpy`, поэтому запускать их
+Это **необычный Python-пакет**: модули импортируют `bpy`, поэтому запускать их
 нужно только внутри Blender, а не через `python`.
 
 ## Команды
@@ -12,9 +11,12 @@ Headless-Blender проект: генерирует 3D-сцену трубки �
 # Локальная сборка Blender 5.2.3 LTS (папка в .gitignore)
 BL=./blender-5.2.3-linux-x64/blender
 
-# Рендер серии N+1 (пункт 4.5)
-$BL --background --python injector3d/create_scene.py -- 4.5 \
-    --tilt-count 8 --tilt-angle 10
+# Рендер серии N+1 (вертикаль + N азимутов наклона) — режим по умолчанию
+$BL --background --python injector3d/create_scene.py -- \
+    --mode ring --tilt-count 8 --tilt-angle 10
+
+# Рендер 5 фиксированных ракурсов
+$BL --background --python injector3d/create_scene.py -- --mode tube
 
 # Кадр под референс 06120 (1200×1200, белый фон, сдвиг вправо 105 px)
 $BL --background --python render_reference.py
@@ -29,7 +31,7 @@ $BL --background --python check_liquid_presets.py
 python3 check_postprocess.py
 
 # Параллельный рендер серии по GPU (системный python3)
-python3 render_parallel.py 4.5 --tilt-count 8 --tilt-angle 10 --gpus 0,1
+python3 render_parallel.py --tilt-count 8 --tilt-angle 10 --gpus 0,1
 
 # Диагностика CUDA/GPU
 $BL --background --python check_cuda.py
@@ -91,13 +93,14 @@ $BL --background --python gpu_info.py
     обходит конус с полууглом θ. Старый `AzimuthRig` давал
     `Rz(φ)·Ry(θ)` — там φ сокращался, и все кадры были идентичны.
   Рендер 1200×1200 в RGBA с `film_transparent=True`, Lensdist
-  `use_fit=False`, затем опциональная постобработка; имена
-  `<жидкость>_<ракурс>[_<tag>][_v<объём>]_<timestamp>.png|.blend`.
-
-> [!IMPORTANT]
-> **Принято к реализации (не в коде):** `<жидкость>` вместо `<step>`,
-> вывод — в `output/<YYYYMMDD_HHMM>/`, timestamp из конца имени уходит,
-> номера шага нет ни в путях, ни в именах файлов, ни в логах.
+  `use_fit=False`, затем опциональная постобработка.
+- `injector3d/output_manager.py` — единый источник путей и имён вывода.
+  Каталог прогона: `<база>/<YYYYMMDD_HHMM>/`, база — `--output-dir`
+  (по умолчанию `config.OUTPUT_DIR`). Имена: `<жидкость>_<ракурс>[_<tag>]
+  [_v<объём>].png`, `<жидкость>_master[_<tag>][_s<k>of<M>].blend`,
+  `<жидкость>_manifest[_<tag>][_s<k>of<M>].json`,
+  `<жидкость>_shard<k>.log`, `<жидкость>[_<tag>].glb`. Ни номера шага, ни
+  timestamp в имени файла нет — каталог уже отличает прогон от прогона.
 - `render_reference.py` — отдельный кадр под `06120.png`:
   `config.REFERENCE_CAMERA`, дополнительно сдвиг +105 px и высота 1124 px.
 - `postprocess_reference.py` — системный `python3` (PIL/numpy): по
@@ -112,20 +115,18 @@ $BL --background --python gpu_info.py
   эллипса (п. 5).
   `PLAN.md`, `CHANGELOG.md` — актуальный контекст и известные проблемы.
 
-## Пункт 4.5 — промежуточный — ЗАВЕРШЁН
+## Серия N+1 (ring) — режим рендера
 
-Пункт 4.5 реализован. Запуск:
+Запуск:
 
 ```bash
-$BL --background --python injector3d/create_scene.py -- 4.5 --tilt-count 8 --tilt-angle 10
+$BL --background --python injector3d/create_scene.py -- --mode ring --tilt-count 8 --tilt-angle 10
 ```
 
 - N+1 кадров: вертикаль + N наклонов на угол θ в плоскостях
   `φ_k = φ_start + k·360°/N`.
 - `N` — `config.TILT_AZIMUTH_COUNT` или `--tilt-count`; `θ` —
   `config.TILT_ANGLE_DEG` или `--tilt-angle`.
-- `parse_step()` поддерживает десятичные номера (`4.5`), `_step_ge()` —
-  сравнение стадий (`4.5 >= 4` → True).
 - Наклон: `render.tilt_matrix(θ, φ) = Rz(φ)·Ry(θ)·Rz(φ)⁻¹` — поворот трубки
   вокруг горизонтальной оси `(-sin φ, cos φ, 0)` через точку опоры
   `config.TILT_PIVOT_Z_MM` (середина трубки).
@@ -165,7 +166,7 @@ $BL --background --python injector3d/create_scene.py -- 4.5 --tilt-count 8 --til
 - `postprocess_reference.py --worker` — один процесс на серию; raw
   отправляется в stdin сразу после рендера, обработка идёт параллельно
   рендеру следующего кадра. В конце серии пишется
-  `<step>_manifest[_<tag>]_<timestamp>.json`.
+  `<жидкость>_manifest[_<tag>][_s<k>of<M>].json`.
 - `liquid.contact_level_mm()` / `contact_center_mm()` — кромка контакта
   (`level + rise` для мениска) и её 3D-центр.
 - Lensdist для 2D-центра: `q = ((x-W/2)/W, (y-H/2)/H)`,
@@ -193,13 +194,15 @@ $BL --background --python injector3d/create_scene.py -- 4.5 --tilt-count 8 --til
   численного и аналитического ΔV ≤ 0.0013 мм³).
 - `export_scene_glb()` экспортирует геометрию трубки и жидкости с
   PBR-материалами в формат GLB (glTF 2.0).
-- `render.py` генерирует имена с `_liq-<type>` для альтернативных жидкостей,
-  записывает `liquid_type`, `liquid_ior`, `camera_distortion` в JSON manifest.
+- `render.py` всегда ставит тип жидкости в начало имени кадра
+  (`water_…`, `glycerol_…`) и записывает `liquid_type`, `liquid_ior`,
+  `camera_distortion` в JSON manifest.
 - `render_parallel.py` (системный `python3`) делит N наклонных кадров
   между GPU, запускает по процессу Blender на GPU и сливает manifest
-  шардов; вертикаль рендерит только шард 0. Логи —
-  `output/<step>/<step>_shard<k>_<ts>.log`, master `.blend` получает
-  суффикс `_s<k>of<M>`.
+  шардов; вертикаль рендерит только шард 0. Все шарды пишут в один
+  каталог прогона: launcher считает `<output-dir>/<timestamp>` и передаёт
+  его шардам через `--output-dir`/`--timestamp`. Логи —
+  `<жидкость>_shard<k>.log`, master `.blend` получает суффикс `_s<k>of<M>`.
 - Замер на 2× P1000: N=4 ×1.10, N=8 ×1.08, а не ~×1.8. Оба GPU уже
   работают внутри одного кадра; launcher — для изоляции шардов/пакетных
   запусков, не основной рычаг скорости. См. `reports/performance.md` §9.5.
@@ -208,19 +211,21 @@ $BL --background --python injector3d/create_scene.py -- 4.5 --tilt-count 8 --til
 - В очереди остаётся пакетный рендер матриц параметров датасетов одним запуском.
   План и замеры — `reports/step6_cli.md`.
 
-## Стадии и артефакты
+## Вывод и артефакты
 
-- Номер пункта после `--` управляет не только именами, но и составом сцены:
-  жидкость с пункта 2, материалы с пункта 4. Без номера используется `1`.
-- `output/<N>/*.png` **отслеживаются git** как результат работы;
-  `.blend`/`.blend1`/`.log` игнорируются. Не удаляйте чужие рендеры и не
-  считайте `output/` временным каталогом.
+- Стадий сцены нет: каждый прогон собирает полную сцену (жидкость +
+  материалы). Режим рендера — `--mode ring` (N+1, по умолчанию) или
+  `--mode tube` (5 ракурсов); номер пункта плана в запуске не участвует.
+- Каталог прогона — `<база>/<YYYYMMDD_HHMM>/`, база — `--output-dir`
+  (по умолчанию `config.OUTPUT_DIR`, т.е. `output/`). `--timestamp`
+  фиксирует имя каталога и синхронизирует шарды.
+- `output/<YYYYMMDD_HHMM>/*.png` **отслеживаются git** как результат
+  работы; `.blend`/`.blend1`/`.json`/`.log` игнорируются. Не удаляйте
+  чужие рендеры и не считайте `output/` временным каталогом.
 - `output/06120/` — отдельный результат под референс; основной
   `create_scene.py` его не перезаписывает.
-- `output/1–3/` — исторические серии студийной камеры 85 мм; текущая
-  камера референса применяется при новом прогоне соответствующего пункта.
-- `output/4.5/` — серия N+1; номер пункта и префикс файлов —
-  `4.5`, отдельно от `output/4/`; в имени PNG есть `v<объём>`.
+- `output/1/` … `output/4.5/` — исторические прогоны старой схемы
+  `output/<пункт>/`; новые прогоны в них не пишутся.
 - Один прогон `render_ring()` = N+1 кадров 1200×1200 @ 128 сэмплов
   (GPU ~9.8 с/кадр в среднем, 5.7–13.4 с в зависимости от азимута; есть
   `RENDER_TIME_LIMIT_S = 75` — страховка, штатно не срабатывает). Серия
@@ -264,8 +269,8 @@ $BL --background --python injector3d/create_scene.py -- 4.5 --tilt-count 8 --til
 
 - Документация, комментарии, отчёты и сообщения коммитов — по-русски;
   коммиты в стиле `Пункт N: ...`.
-- Порядок работы по пунктам плана: сначала обновить/проверить код и
-  `check_liquid.py`, затем перерендерить затронутые `output/<N>/`.
+- Порядок работы: сначала обновить/проверить код и `check_liquid.py`,
+  затем перерендерить затронутые серии в новый каталог прогона.
 - Не менять геометрию/материалы «на ходу» без повторного рендера: PNG в
   `output/` должны соответствовать текущему коду.
 - Пункт 3 завершён: мениск работает для вертикали и наклона, отчёт —

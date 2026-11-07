@@ -4,13 +4,14 @@
 на этапе вертикальной сцены): трубка в кадре не меняется, наклоняется
 только жидкость. Отличаются режимы типом поворота трубки:
 
-- `render_tube()` (п. 1–4): наклон вокруг дна по историческим Эйлеровым
+- `render_tube()`: наклон вокруг дна по историческим Эйлеровым
   `config.TILT_VARIANTS`;
-- `render_ring()` (п. 4.5): наклон на θ в плоскости азимута φ вокруг точки
+- `render_ring()`: наклон на θ в плоскости азимута φ вокруг точки
   опоры — `tilt_matrix(θ, φ) = Rz(φ)·Ry(θ)·Rz(φ)⁻¹` в точке опоры.
 
 Свет остаётся в мировых координатах, жидкость — тоже (уровень горизонтален).
-Имена файлов: `<step>_<ракурс>[_<tag>][_v<объём>]_<timestamp>.png`.
+Имена файлов: `<жидкость>_<ракурс>[_<tag>][_v<объём>].png`.
+Каталог вывода: `<output_dir>/<YYYYMMDD_HHMM>/`.
 """
 
 import bpy
@@ -20,12 +21,12 @@ import os
 import shutil
 import subprocess
 import tempfile
-import time
 
 from mathutils import Matrix, Vector
 from bpy_extras.object_utils import world_to_camera_view
 
 from .config import (
+    DEFAULT_LIQUID_TYPE,
     MM,
     OUTPUT_DIR,
     PROJECT_DIR,
@@ -38,6 +39,15 @@ from .config import (
     tilt_ring_variants,
 )
 from .liquid import contact_center_mm
+from .output_manager import (
+    blend_filename,
+    ensure_dir,
+    manifest_filename,
+    master_blend_filename,
+    new_timestamp,
+    render_dir,
+    render_filename,
+)
 from .scene import attach_camera_to_tube
 
 
@@ -208,14 +218,14 @@ def _manifest_frames(results):
     return frames
 
 
-def _write_manifest(base, step, ts, tag, results):
-    name = (f'{step}_manifest_{tag}_{ts}.json' if tag
-            else f'{step}_manifest_{ts}.json')
+def _write_manifest(base, liquid_type, tag, shard_suffix, results):
+    """Manifest серии: имя без timestamp, он уже в имени каталога."""
+    name = manifest_filename(liquid_type, tag, shard_suffix)
     path = os.path.join(base, name)
     payload = {
-        'step': step,
         'tag': tag,
-        'timestamp': ts,
+        'timestamp': os.path.basename(base),
+        'liquid_type': liquid_type,
         'frames': _manifest_frames(results),
     }
     with open(path, 'w', encoding='utf-8') as fh:
@@ -269,22 +279,6 @@ def _render_one(scene, final_path, variant_name, metadata=None,
     bpy.ops.render.render(write_still=True)
     print(f'  Рендер: {variant_name} -> {os.path.basename(final_path)}')
     return {'raw': None, 'final': final_path, 'metadata': meta}
-
-
-def _volume_tag(volume_mm3):
-    if volume_mm3 is None:
-        return ''
-    return f'_v{int(round(float(volume_mm3)))}'
-
-
-def _render_filename(step, variant_name, ts, volume_mm3, tag=None, liquid_type=None):
-    parts = [step, variant_name]
-    if tag:
-        parts.append(tag)
-    if liquid_type and liquid_type != 'water':
-        parts.append(f'liq-{liquid_type}')
-    stem = '_'.join(parts) + _volume_tag(volume_mm3)
-    return f'{stem}_{ts}.png'
 
 
 def _tilt_deg_from_matrix(mw):
@@ -410,8 +404,11 @@ def export_scene_glb(filepath, objects=None):
             bpy.context.view_layer.objects.active = prev_active
 
 
-def render_tube(tube, camera, step='1', on_tilt=None,
-                postprocess=None, overlay=None, timestamp=None, tag=None):
+# ─── render_tube ─────────────────────────────────────────────────────
+
+def render_tube(tube, camera, output_dir=None, on_tilt=None,
+                postprocess=None, overlay=None, tag=None,
+                liquid_type=None):
     """Рендер трубки под каждым из TILT_VARIANTS.
 
     Parameters
@@ -420,17 +417,19 @@ def render_tube(tube, camera, step='1', on_tilt=None,
         Объект трубки.
     camera : bpy.types.Object
         Объект камеры.
-    step : str
-        Номер шага для именования файлов.
+    output_dir : str | None
+        Каталог вывода (уже готовый каталог прогона).
+        Если None — `config.OUTPUT_DIR/<timestamp>`.
     on_tilt : callable | None
         Вызывается после установки поворота трубки — перестроить жидкость
         под новую ориентацию (её уровень горизонтален в мировых координатах).
     postprocess, overlay : dict | None
         Настройки постобработки и подписей; None — значения из config.
+    liquid_type : str | None
+        Тип жидкости для имён файлов.
     """
-    ts = timestamp or time.strftime('%Y%m%d_%H%M%S')
-    base = os.path.join(OUTPUT_DIR, step)
-    os.makedirs(base, exist_ok=True)
+    base = ensure_dir(output_dir
+                      or render_dir(OUTPUT_DIR, new_timestamp()))
 
     attach_camera_to_tube(camera, tube)
 
@@ -439,6 +438,7 @@ def render_tube(tube, camera, step='1', on_tilt=None,
     worker = (_start_postprocess_worker(opts)
               if opts.get('enabled', True) else None)
     results = []
+    liq = liquid_type or DEFAULT_LIQUID_TYPE
 
     try:
         for variant_name, tilt_euler in TILT_VARIANTS:
@@ -458,12 +458,12 @@ def render_tube(tube, camera, step='1', on_tilt=None,
             meta = _frame_metadata(
                 volume, None, _tilt_deg_from_matrix(tube.matrix_world),
                 center, scene, liquid_type=liq_type, liquid_config=liq_cfg)
-            render_fname = _render_filename(
-                step, variant_name, ts, volume, tag, liquid_type=liq_type)
+            render_fname = render_filename(
+                liq_type, variant_name, tag, volume)
             final_path = os.path.join(base, render_fname)
 
             # Сохраняем .blend (историческое поведение render_tube)
-            blend_fname = f'{step}_{variant_name}_{ts}.blend'
+            blend_fname = blend_filename(liq, variant_name, tag)
             blend_path = os.path.join(base, blend_fname)
             bpy.ops.wm.save_as_mainfile(filepath=blend_path)
             print(f'  Сохранён: {blend_fname}')
@@ -480,8 +480,10 @@ def render_tube(tube, camera, step='1', on_tilt=None,
     finally:
         _stop_worker_quietly(worker)
 
-    _write_manifest(base, step, ts, tag, results)
+    _write_manifest(base, liq, tag, '', results)
 
+
+# ─── tilt_matrix ─────────────────────────────────────────────────────
 
 def tilt_matrix(theta_rad, azimuth_deg):
     """Мировая матрица трубки: наклон θ в плоскости азимута φ вокруг опоры.
@@ -498,11 +500,13 @@ def tilt_matrix(theta_rad, azimuth_deg):
     return Matrix.Translation(pivot) @ rot @ Matrix.Translation(-pivot)
 
 
+# ─── render_ring ─────────────────────────────────────────────────────
+
 def render_ring(tube, liquid_upright, liquid_tilted,
-                step='4.5', n=4, angle=10.0,
+                output_dir=None, n=4, angle=10.0,
                 info_upright=None, info_tilted=None,
                 postprocess=None, overlay=None, shard=None,
-                timestamp=None, tag=None):
+                tag=None, liquid_type=None):
     """Рендер N+1 кадров: вертикаль + N плоскостей наклона при угле `angle`.
 
     Камера — дочерняя трубке (привязка сделана в `create_scene` на этапе
@@ -542,9 +546,8 @@ def render_ring(tube, liquid_upright, liquid_tilted,
 
     geometric_tag = f'a{angle:g}_n{n}'
     tag = f'{geometric_tag}_{tag}' if tag else geometric_tag
-    ts = timestamp or time.strftime('%Y%m%d_%H%M%S')
-    base = os.path.join(OUTPUT_DIR, step)
-    os.makedirs(base, exist_ok=True)
+    base = ensure_dir(output_dir
+                      or render_dir(OUTPUT_DIR, new_timestamp()))
 
     scene = _prepare_render_scene()
 
@@ -555,7 +558,8 @@ def render_ring(tube, liquid_upright, liquid_tilted,
     liquid_tilted.hide_render = True
     bpy.context.view_layer.update()
 
-    master_fname = f'{step}_master_{tag}{shard_suffix}_{ts}.blend'
+    liq = liquid_type or DEFAULT_LIQUID_TYPE
+    master_fname = master_blend_filename(liq, tag, shard_suffix)
     master_path = os.path.join(base, master_fname)
     bpy.ops.wm.save_as_mainfile(filepath=master_path)
     print(f'  Сохранён master: {master_fname}')
@@ -588,8 +592,8 @@ def render_ring(tube, liquid_upright, liquid_tilted,
             center = _center_for_info(tube, info)
             meta = _frame_metadata(volume, azimuth_deg, tilt_deg, center,
                                    scene, liquid_type=liq_type, liquid_config=liq_cfg)
-            render_fname = _render_filename(
-                step, variant_name, ts, volume, tag, liquid_type=liq_type)
+            render_fname = render_filename(
+                liq_type, variant_name, tag, volume)
             final_path = os.path.join(base, render_fname)
             job = _render_one(
                 scene, final_path, variant_name, meta, postprocess, overlay)
@@ -603,7 +607,7 @@ def render_ring(tube, liquid_upright, liquid_tilted,
     finally:
         _stop_worker_quietly(worker)
 
-    _write_manifest(base, step, ts, tag + shard_suffix, results)
+    _write_manifest(base, liq, tag, shard_suffix, results)
 
     # Оставляем сцену в вертикальном положении для сохранения/отладки.
     tube.matrix_world = Matrix.Identity(4)

@@ -1,14 +1,18 @@
 #!/usr/bin/env python3
 """
-injector3d — entry-point для шага 1: геометрия трубки.
+injector3d — entry-point сборки сцены и рендера.
 
 Собирает модули:
   - tube_geometry.create_tube()
   - materials.create_material_plastic() / create_material_liquid()
   - liquid.create_liquid()
   - scene.setup_scene()
-  - render.render_tube()
+  - render.render_tube() / render.render_ring()
   - валидация (габариты, замкнутость, объём)
+
+Сцена всегда полная: жидкость и материалы подключаются в каждом прогоне.
+Режим рендера выбирается явно (`--mode ring|tube`), каталог вывода —
+`--output-dir` (по умолчанию `config.OUTPUT_DIR/<YYYYMMDD_HHMM>`).
 """
 
 import sys
@@ -35,6 +39,7 @@ from injector3d.liquid import (
 from injector3d.scene import setup_scene, attach_camera_to_tube
 from injector3d.render import render_tube, render_ring, tilt_matrix, export_scene_glb
 from injector3d import config as cfg
+from injector3d import output_manager as om
 from injector3d.config import (
     INNER_DIAMETER,
     HEIGHT,
@@ -45,33 +50,7 @@ from injector3d.config import (
     get_camera_config,
 )
 
-
-def parse_step(default="1"):
-    """Номер пункта плана из `blender ... --python file.py -- <шаг>`.
-
-    Номер попадает в имена файлов рендера, чтобы кадры разных пунктов
-    плана не перезаписывали друг друга. Поддерживает целые и десятичные
-    номера (например, ``4.5``).
-    """
-    argv = sys.argv
-    if "--" in argv:
-        tail = argv[argv.index("--") + 1:]
-        if tail:
-            s = tail[0].strip()
-            if s.isdigit():
-                return s
-            parts = s.split('.')
-            if len(parts) == 2 and parts[0].isdigit() and parts[1].isdigit():
-                return s
-    return default
-
-
-def _step_ge(step, n):
-    """Сравнение шага с целым номером (``4.5 >= 4`` → True)."""
-    try:
-        return float(step) >= n
-    except ValueError:
-        return False
+RENDER_MODES = ('ring', 'tube')
 
 
 def _parse_color(text):
@@ -258,11 +237,23 @@ def validate_liquid(liquid, target_mm3, info):
     return True
 
 
+def _dup_mesh_object(obj):
+    """Дублирует объект с его мешем в новый bpy.data.object.
+
+    `Mesh.copy()` переносит и слоты материалов, поэтому их не нужно
+    копировать отдельно.
+    """
+    new_obj = bpy.data.objects.new(obj.name + "_dup", obj.data.copy())
+    bpy.context.collection.objects.link(new_obj)
+    new_obj.hide_render = True
+    return new_obj
+
+
 def main():
     """Точка входа."""
-    step = parse_step()
+    mode = 'ring'
+    output_dir = None
 
-    # Разбираем CLI-параметры пунктов 4.5–6
     n_tilt = None
     angle_tilt = None
     fill_fraction = None
@@ -273,7 +264,6 @@ def main():
     timestamp = None
     tag = None
 
-    # Новые параметры пункта 6: жидкость, камера, экспорт
     liquid_type = None
     liquid_ior = None
     liquid_density = None
@@ -298,6 +288,14 @@ def main():
     i = 0
     while i < len(tail):
         arg = tail[i]
+        if arg == '--mode' and i + 1 < len(tail):
+            mode = tail[i + 1].strip().lower()
+            i += 2
+            continue
+        if arg == '--output-dir' and i + 1 < len(tail):
+            output_dir = tail[i + 1]
+            i += 2
+            continue
         if arg == '--tilt-count' and i + 1 < len(tail):
             n_tilt = int(tail[i + 1])
             i += 2
@@ -397,6 +395,10 @@ def main():
         i += 1
     postprocess, overlay = parse_render_options(tail)
 
+    if mode not in RENDER_MODES:
+        raise SystemExit(
+            f'Ошибка: --mode должен быть одним из {", ".join(RENDER_MODES)}')
+
     liquid_config = get_liquid_config(
         preset=liquid_type,
         ior=liquid_ior,
@@ -439,15 +441,21 @@ def main():
     if shard_count < 1 or not (0 <= shard_index < shard_count):
         raise ValueError('нужно 0 <= shard-index < shard-count')
 
-    # Жидкость с горизонтальным уровнем появляется с пункта 2, материалы —
-    # с пункта 4: раньше рендер показывал бы то, чего на стадии ещё нет.
-    with_liquid = _step_ge(step, 2)
-    with_materials = _step_ge(step, 4)
-    is_ring = step == '4.5'
-    print(f"=== injector3D — Пункт {step}"
-          f"{' + жидкость' if with_liquid else ''}"
-          f"{' + материалы' if with_materials else ''}"
-          f"{' N+1' if is_ring else ''} ===\n")
+    # Сцена всегда полная: жидкость и материалы собираются в каждом
+    # прогоне. Режим выбирается явно — раньше его задавал номер пункта.
+    is_ring = mode == 'ring'
+    n = n_tilt if n_tilt is not None else cfg.TILT_AZIMUTH_COUNT
+    angle = angle_tilt if angle_tilt is not None else cfg.TILT_ANGLE_DEG
+
+    # Каталог прогона считается здесь один раз, чтобы кадры, master
+    # `.blend`, manifest и GLB легли в него же (а не в разные папки).
+    # `--output-dir` — это база: прогон всегда в подкаталоге по ts.
+    ts = timestamp or om.new_timestamp()
+    run_dir = om.render_dir(output_dir or cfg.OUTPUT_DIR, ts)
+
+    print(f"=== injector3D — {'N+1 (ring)' if is_ring else '5 ракурсов (tube)'}"
+          f" + жидкость + материалы ===")
+    print(f"    вывод: {run_dir}\n")
 
     # 1. Сцена
     print("1/5  Настройка сцены...")
@@ -468,107 +476,98 @@ def main():
 
     # 4. Материалы и жидкость
     print("4/5  Материалы и жидкость...")
-    liquid = None
+    liquid = create_liquid("Liquid")
     on_tilt = None
     liquid_upright = None
     liquid_tilted = None
-    if not with_liquid:
-        print("   ⏭  Пропущено: жидкость подключается с пункта 2")
+    print(f"   Вместимость полости: {capacity:.2f} мм³, "
+          f"цель {fill_fraction * 100:.0f}% = {target_mm3:.2f} мм³")
+
+    mat_plastic = create_material_plastic("Plastic")
+    mat_liquid = create_material_liquid("Liquid", liquid_config=liquid_config)
+    tube.data.materials.append(mat_plastic)
+    liquid.data.materials.append(mat_liquid)
+    print(f"   ✅ Трубка: {tube.data.materials[0].name} "
+          f"(IOR={cfg.IOR_PMMA}, transmission=1.0, roughness=0.0)")
+    print(f"   ✅ Жидкость ({liquid_config.get('display_name', 'Liquid')}): "
+          f"IOR={liquid_config['ior']}, "
+          f"absorption density={liquid_config['absorption_density']}")
+
+    # В ring-режиме строим два меша: upright и один наклонный.
+    # Камера привязывается к трубке ЗДЕСЬ, на этапе вертикальной сцены,
+    # поэтому в цикле рендера достаточно менять tube.matrix_world:
+    # положение, наведение и ракурс камеры пересчитываются Blender'ом
+    # сами, трубка и камера всегда остаются одной системой.
+    if is_ring:
+        print(f"   Серия наклонов: N={n}, θ={angle}°")
+
+        # 0) Трубка вертикальна -> привязка камеры. matrix_world трубки
+        #    единична, поэтому matrix_parent_inverse тоже единичен и
+        #    камера повторяет любой последующий поворот трубки.
+        tube.matrix_world = Matrix.Identity(4)
+        bpy.context.view_layer.update()
+        attach_camera_to_tube(camera, tube)
+
+        # 1) upright-меш: трубка вертикальна
+        info_up = build_liquid(liquid, tube, target_mm3, use_fast=True,
+                               liquid_config=liquid_config)
+        liquid_upright = _dup_mesh_object(liquid)
+        liquid_upright.name = "Liquid_upright"
+
+        # 2) наклонный меш при φ = 0: наклон θ вокруг точки опоры
+        tube.matrix_world = tilt_matrix(math.radians(angle), 0.0)
+        bpy.context.view_layer.update()
+        info_t = build_liquid(liquid, tube, target_mm3, use_fast=True,
+                              liquid_config=liquid_config)
+        liquid_tilted = _dup_mesh_object(liquid)
+        liquid_tilted.name = "Liquid_tilted"
+
+        # 3) Трубка обратно вертикально. Камера остаётся дочерней:
+        #    в рендере меняем только tube.matrix_world.
+        tube.matrix_world = Matrix.Identity(4)
+        bpy.context.view_layer.update()
+
+        # Исходный объект — промежуточная заготовка, в кадр не попадает
+        liquid.hide_render = True
+        liquid.hide_viewport = True
+
+        print(f"   ✅ Upright: уровень {info_up['level_mm']:.3f} мм, "
+              f"V={info_up['volume_mm3']:.2f} мм³")
+        print(f"   ✅ Tilted: уровень {info_t['level_mm']:.3f} мм, "
+              f"V={info_t['volume_mm3']:.2f} мм³")
+        validate_liquid(liquid_upright, target_mm3, info_up)
+        validate_liquid(liquid_tilted, target_mm3, info_t)
+        print("   ✅ Жидкость: 2 меша (upright + наклонённый)\n")
     else:
-        liquid = create_liquid("Liquid")
-        print(f"   Вместимость полости: {capacity:.2f} мм³, "
-              f"цель {fill_fraction * 100:.0f}% = {target_mm3:.2f} мм³")
+        # Обычный рендер: перестраиваем жидкость на каждый наклон
+        def on_tilt(variant_name, tilt_euler):
+            info = build_liquid(liquid, tube, target_mm3,
+                                liquid_config=liquid_config)
+            flag = "  ⚠ переливается" if info['spilled'] else ""
+            print(f"     {variant_name:<9} наклон {tilt_euler} -> "
+                  f"уровень {info['level_mm']:7.3f} мм, "
+                  f"объём {info['volume_mm3']:9.2f} мм³ "
+                  f"(Δ {info['error_mm3']:+.3f}){flag}")
+            return info
 
-        if with_materials:
-            mat_plastic = create_material_plastic("Plastic")
-            mat_liquid = create_material_liquid("Liquid", liquid_config=liquid_config)
-            tube.data.materials.append(mat_plastic)
-            liquid.data.materials.append(mat_liquid)
-            print(f"   ✅ Трубка: {tube.data.materials[0].name} "
-                  f"(IOR={cfg.IOR_PMMA}, transmission=1.0, roughness=0.0)")
-            print(f"   ✅ Жидкость ({liquid_config.get('display_name', 'Liquid')}): "
-                  f"IOR={liquid_config['ior']}, absorption density={liquid_config['absorption_density']}")
-        else:
-            print("   ⏭  Материалы: подключаются с пункта 4")
-
-        # Для пункта 4.5 строим два меша: upright и один наклонный.
-        # Камера привязывается к трубке ЗДЕСЬ, на этапе вертикальной сцены,
-        # поэтому в цикле рендера достаточно менять tube.matrix_world:
-        # положение, наведение и ракурс камеры пересчитываются Blender'ом
-        # сами, трубка и камера всегда остаются одной системой.
-        if is_ring:
-            n = n_tilt if n_tilt is not None else cfg.TILT_AZIMUTH_COUNT
-            angle = angle_tilt if angle_tilt is not None else cfg.TILT_ANGLE_DEG
-            print(f"   Серия наклонов: N={n}, θ={angle}°")
-
-            # 0) Трубка вертикальна -> привязка камеры. matrix_world трубки
-            #    единична, поэтому matrix_parent_inverse тоже единичен и
-            #    камера повторяет любой последующий поворот трубки.
-            tube.matrix_world = Matrix.Identity(4)
-            bpy.context.view_layer.update()
-            attach_camera_to_tube(camera, tube)
-
-            # 1) upright-меш: трубка вертикальна
-            info_up = build_liquid(liquid, tube, target_mm3, use_fast=True,
-                                   liquid_config=liquid_config)
-            liquid_upright = _dup_mesh_object(liquid)
-            liquid_upright.name = "Liquid_upright"
-
-            # 2) наклонный меш при φ = 0: наклон θ вокруг точки опоры
-            tube.matrix_world = tilt_matrix(math.radians(angle), 0.0)
-            bpy.context.view_layer.update()
-            info_t = build_liquid(liquid, tube, target_mm3, use_fast=True,
-                                  liquid_config=liquid_config)
-            liquid_tilted = _dup_mesh_object(liquid)
-            liquid_tilted.name = "Liquid_tilted"
-
-            # 3) Трубка обратно вертикально. Камера остаётся дочерней:
-            #    в рендере меняем только tube.matrix_world.
-            tube.matrix_world = Matrix.Identity(4)
-            bpy.context.view_layer.update()
-
-            # Исходный объект — промежуточная заготовка, в кадр не попадает
-            liquid.hide_render = True
-            liquid.hide_viewport = True
-
-            print(f"   ✅ Upright: уровень {info_up['level_mm']:.3f} мм, "
-                  f"V={info_up['volume_mm3']:.2f} мм³")
-            print(f"   ✅ Tilted: уровень {info_t['level_mm']:.3f} мм, "
-                  f"V={info_t['volume_mm3']:.2f} мм³")
-            validate_liquid(liquid_upright, target_mm3, info_up)
-            validate_liquid(liquid_tilted, target_mm3, info_t)
-            print("   ✅ Жидкость: 2 меша (upright + наклонённый)\n")
-        else:
-            # Обычный рендер: перестраиваем жидкость на каждый наклон
-            def on_tilt(variant_name, tilt_euler):
-                info = build_liquid(liquid, tube, target_mm3,
-                                    liquid_config=liquid_config)
-                flag = "  ⚠ переливается" if info['spilled'] else ""
-                print(f"     {variant_name:<9} наклон {tilt_euler} -> "
-                      f"уровень {info['level_mm']:7.3f} мм, "
-                      f"объём {info['volume_mm3']:9.2f} мм³ "
-                      f"(Δ {info['error_mm3']:+.3f}){flag}")
-                return info
-
-            info = on_tilt('upright', (0.0, 0.0, 0.0))
-            if info['spilled']:
-                print(f"   ⚠  Заполнение {fill_fraction * 100:.0f}% переливается "
-                      f"через край: максимум {info['volume_mm3']:.2f} мм³")
-            print(f"   ✅ Жидкость: уровень {info['level_mm']:.3f} мм, "
-                  f"объём {info['volume_mm3']:.2f} мм³")
-            if with_materials:
-                print(f"   ✅ Жидкость: {liquid.data.materials[0].name} "
-                      f"(IOR={liquid_config['ior']}, absorption density={liquid_config['absorption_density']})")
-            validate_liquid(liquid, target_mm3, info)
+        info = on_tilt('upright', (0.0, 0.0, 0.0))
+        if info['spilled']:
+            print(f"   ⚠  Заполнение {fill_fraction * 100:.0f}% переливается "
+                  f"через край: максимум {info['volume_mm3']:.2f} мм³")
+        print(f"   ✅ Жидкость: уровень {info['level_mm']:.3f} мм, "
+              f"объём {info['volume_mm3']:.2f} мм³")
+        print(f"   ✅ Жидкость: {liquid.data.materials[0].name} "
+              f"(IOR={liquid_config['ior']}, "
+              f"absorption density={liquid_config['absorption_density']})")
+        validate_liquid(liquid, target_mm3, info)
     print("   ✅ Готово.\n")
 
-    # 5. Экспорт GLB (если запрошен)
+    # 5. Экспорт GLB (если запрошен) — в каталог прогона
     if export_glb_path:
         if export_glb_path is True:
-            glb_ts = timestamp or time.strftime('%Y%m%d_%H%M%S')
-            tag_part = f'_{tag}' if tag else ''
+            om.ensure_dir(run_dir)
             export_glb_path = os.path.join(
-                cfg.OUTPUT_DIR, step, f'{step}{tag_part}_{glb_ts}.glb')
+                run_dir, om.glb_filename(liquid_type, tag))
         objs_to_export = [tube]
         if is_ring:
             if liquid_upright:
@@ -579,36 +578,22 @@ def main():
 
     # 6. Рендер
     if is_ring:
-        n = n_tilt if n_tilt is not None else cfg.TILT_AZIMUTH_COUNT
-        angle = angle_tilt if angle_tilt is not None else cfg.TILT_ANGLE_DEG
         print(f"5/5  Рендер N+1 ({n + 1} кадров, θ={angle}°)...")
         render_ring(tube, liquid_upright, liquid_tilted,
-                    step=step, n=n, angle=angle,
+                    output_dir=run_dir, n=n, angle=angle,
                     info_upright=info_up, info_tilted=info_t,
                     postprocess=postprocess, overlay=overlay,
                     shard=((shard_index, shard_count)
                            if shard_count > 1 else None),
-                    timestamp=timestamp, tag=tag)
+                    tag=tag, liquid_type=liquid_config['name'])
     else:
-        print(f"5/5  Рендер под 5 углами (пункт {step})...")
-        render_tube(tube, camera, step=step, on_tilt=on_tilt,
+        print("5/5  Рендер под 5 углами...")
+        render_tube(tube, camera, output_dir=run_dir, on_tilt=on_tilt,
                     postprocess=postprocess, overlay=overlay,
-                    timestamp=timestamp, tag=tag)
+                    tag=tag, liquid_type=liquid_config['name'])
     print("   ✅ Готово.\n")
 
-    print(f"=== Пункт {step} завершён ===")
-
-
-def _dup_mesh_object(obj):
-    """Дублирует объект с его мешем в новый bpy.data.object.
-
-    `Mesh.copy()` переносит и слоты материалов, поэтому их не нужно
-    копировать отдельно.
-    """
-    new_obj = bpy.data.objects.new(obj.name + "_dup", obj.data.copy())
-    bpy.context.collection.objects.link(new_obj)
-    new_obj.hide_render = True
-    return new_obj
+    print(f"=== Прогон завершён: {run_dir} ===")
 
 
 if __name__ == "__main__":

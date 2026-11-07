@@ -66,7 +66,7 @@
 BL=./blender-5.2.3-linux-x64/blender
 
 # Основная серия: 1200×1200, RGBA (заливка фона опциональна)
-$BL --background --python injector3d/create_scene.py -- 4
+$BL --background --python injector3d/create_scene.py -- --mode ring
 
 # Одиночный кадр под 06120 (сдвиг и масштаб под референс)
 $BL --background --python render_reference.py
@@ -94,11 +94,12 @@ f/2.8. Они лежат в `config.REFERENCE_CAMERA`, а `config.SCENE_CAMERA`
 Пункт 4.5 реализован. Запуск:
 
 ```bash
-$BL --background --python injector3d/create_scene.py -- 4.5 --tilt-count 8 --tilt-angle 10
-# → output/4.5/4.5_<ракурс>_a10_n8_v<объём>_<YYYYMMDD_HHMMSS>.png
+$BL --background --python injector3d/create_scene.py -- \
+    --mode ring --tilt-count 8 --tilt-angle 10
+# → output/<YYYYMMDD_HHMM>/water_<ракурс>_a10_n8_v<объём>.png
 
 # То же, но двумя процессами Blender по одному GPU на каждый
-python3 render_parallel.py 4.5 --tilt-count 8 --tilt-angle 10 --gpus 0,1
+python3 render_parallel.py --tilt-count 8 --tilt-angle 10 --gpus 0,1
 ```
 
 Плоскости наклона: старт с `TILT_AZIMUTH_START_DEG = 270°`, шаг `-360°/N`.
@@ -128,6 +129,7 @@ injector3d/
 ├── materials.py      # Материалы: пластик PMMA, жидкость с поглощением
 ├── scene.py          # Настройка сцены, камеры, освещения, CUDA-устройств
 ├── render.py         # Рендер под разными углами
+├── output_manager.py # Каталог прогона и имена файлов вывода
 └── create_scene.py   # Entry-point
 render_reference.py   # Рендер кадра под референс 06120
 postprocess_reference.py  # Заливка (опц.), масштаб/сдвиг, подписи
@@ -138,37 +140,68 @@ check_postprocess.py  # Проверки постобработки без Blend
 calib_world.py        # Подбор WORLD_STRENGTH по сетке прогонов
 check_cuda.py         # Диагностика доступности CUDA в сборке Blender
 gpu_info.py           # Список устройств рендера и их параметров
-output/<пункт>/       # Рендеры и .blend-файлы (историческая схема)
-output/4.5/           # Серия N+1 (п. 4.5)
+output/<YYYYMMDD_HHMM>/ # Прогон: PNG, master .blend, manifest, GLB
+output/1/ … output/4.5/ # Исторические прогоны старой схемы (в git)
 output/06120/         # Кадры под референс 06120
 reports/              # Отчёты по пунктам плана
 ```
 
+## Соглашение о выводе
+
+Реализовано; номера пункта плана нет ни в путях, ни в именах файлов, ни
+в логах. Единый источник имён — `injector3d/output_manager.py`.
+
+| Артефакт | Имя |
+|----------|-----|
+| каталог прогона | `<база>/<YYYYMMDD_HHMM>/`, база — `--output-dir` или `config.OUTPUT_DIR` |
+| кадр | `<жидкость>_<ракурс>[_<tag>][_v<объём>].png` |
+| master серии | `<жидкость>_master[_<tag>][_s<k>of<M>].blend` |
+| `.blend` ракурса (tube) | `<жидкость>_<ракурс>[_<tag>].blend` |
+| manifest | `<жидкость>_manifest[_<tag>][_s<k>of<M>].json` |
+| лог шарда | `<жидкость>_shard<k>.log` |
+| GLB | `<жидкость>[_<tag>].glb` |
+
+Timestamp в имени каталога заменяет и timestamp файла, и номер пункта:
+каталог уже отличает прогон от прогона, а префикс-жидкость — серию
+внутри прогона. Стадии сцены упразднены — каждый прогон собирает полную
+сцену (жидкость + материалы), режим выбирается `--mode ring|tube`.
+
 ## Запуск
 
-Номер пункта плана передаётся после `--` — он определяет каталог вывода
-и префикс имён файлов, поэтому кадры разных пунктов не затирают друг друга:
+Каталог вывода и имена файлов не зависят от номера пункта плана: каждый
+прогон — свой каталог по timestamp, а внутри него кадры с типом жидкости
+в начале имени. Режим рендера задаётся явно (`--mode ring|tube`), сцена
+всегда полная (жидкость + материалы):
 
 ```bash
-blender --background --python injector3d/create_scene.py -- 4
-# → output/4/4_<ракурс>_<YYYYMMDD_HHMMSS>.png
+# Серия N+1 (вертикаль + N азимутов наклона) — режим по умолчанию
+$BL --background --python injector3d/create_scene.py -- \
+    --mode ring --tilt-count 8 --tilt-angle 10
+# → output/<YYYYMMDD_HHMM>/water_az270_a10_n8_v12901.png
+#   output/<YYYYMMDD_HHMM>/water_master_a10_n8.blend
+#   output/<YYYYMMDD_HHMM>/water_manifest_a10_n8.json
+
+# Пять фиксированных ракурсов
+$BL --background --python injector3d/create_scene.py -- --mode tube
+
+# Своя база вывода, глицерин, экспорт GLB, метки на кадре
+$BL --background --python injector3d/create_scene.py -- \
+    --mode ring --tilt-count 4 --tilt-angle 30 --liquid-type glycerol \
+    --output-dir /mnt/datasets/injector --export-glb --overlay-liquid
+# → /mnt/datasets/injector/<YYYYMMDD_HHMM>/glycerol_*.png + glycerol_*.glb
 ```
 
-Без номера подставляется `1`. Стадии включаются по номеру: жидкость — с
-пункта 2, материалы — с пункта 4, чтобы рендер не показывал то, чего на
-текущей стадии ещё нет.
+`--output-dir` — база: прогон всегда кладётся в `<база>/<timestamp>/`.
+Без него база — `config.OUTPUT_DIR` (`output/`). `--timestamp` фиксирует
+имя каталога (им именно синхронизируются шарды в `render_parallel.py`).
 
-> [!IMPORTANT]
-> **Принято решение это убрать** (реализуется следующим шагом): номер
-> пункта выводится из имён, путей и стадий полностью. Каталог вывода —
-> `output/<YYYYMMDD_HHMM>/` (или `--output-dir PATH`), имя файла
-> начинается с типа жидкости, timestamp из имени исчезает, стадии сцены
-> отменяются — каждый прогон собирает полную сцену (жидкость + материалы).
+Полный набор флагов — `reports/step6_cli.md`; имена файлов формирует
+`injector3d/output_manager.py`.
 
 Тип жидкости выбирается `--liquid-type`, камера — `--camera-preset`:
 
 ```bash
-$BL --background --python injector3d/create_scene.py -- 4.5 \
+$BL --background --python injector3d/create_scene.py -- \
     --liquid-type glycerol --camera-preset reference --tilt-count 8 --tilt-angle 10
 ```
 
