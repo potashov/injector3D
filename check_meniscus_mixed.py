@@ -14,7 +14,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from mathutils import Vector
+from mathutils import Euler, Vector
 
 from injector3d.config import (
     CONTACT_ANGLE_DEG,
@@ -97,6 +97,60 @@ def test_2000_50():
     bm.free()
 
 
+def test_closed_2000_50():
+    print("--- замкнутый меш 2000 мм³ @ 50° ---")
+    mw = _mw(50.0)
+    res = build_mixed_meniscus(mw, 2000.0, return_bmesh=True, closed=True)
+    check("объём меша", res['volume_mm3'], 2000.0, 0.05)
+    check_true("смешанный контакт", res['mixed'])
+    check_true("не перелив", not res['spilled'])
+    check_true("не плоский fallback", not res['flat'])
+
+    bm = res['bmesh']
+    print(f"  меш: verts={len(bm.verts)} faces={len(bm.faces)} "
+          f"edges={len(bm.edges)}")
+    manifold = sum(1 for e in bm.edges if len(e.link_faces) == 2)
+    boundary = sum(1 for e in bm.edges if len(e.link_faces) == 1)
+    loose = sum(1 for e in bm.edges if len(e.link_faces) == 0)
+    degenerate = sum(1 for f in bm.faces if f.calc_area() <= 1e-15)
+    check_true("нет граничных рёбер", boundary == 0)
+    check_true("нет висячих рёбер", loose == 0)
+    check_true("все рёбра manifold", manifold == len(bm.edges))
+    check_true("нет вырожденных граней", degenerate == 0)
+    check("объём bmesh", bm.calc_volume(signed=True) / (0.001 ** 3),
+          res['volume_mm3'], 0.05)
+    bm.free()
+
+
+def _mesh_points(res):
+    bm = res['bmesh']
+    pts = sorted((round(v.co.x / 0.001, 5), round(v.co.y / 0.001, 5),
+                  round(v.co.z / 0.001, 5)) for v in bm.verts)
+    bm.free()
+    return pts
+
+
+def test_azimuth_rotation():
+    print("--- поворот mixed-меша по азимуту (2000 мм³ @ 50°) ---")
+    base = build_mixed_meniscus(_mw(50.0, 0.0), 2000.0,
+                                return_bmesh=True, closed=True)
+    base_pts = _mesh_points(base)
+    for phi in (90.0, 180.0, 270.0):
+        res = build_mixed_meniscus(_mw(50.0, phi), 2000.0,
+                                   return_bmesh=True, closed=True)
+        got = _mesh_points(res)
+        rot = Euler((0.0, 0.0, math.radians(phi))).to_matrix()
+        rotated = sorted(tuple(round(c / 0.001, 5)
+                               for c in (rot @ Vector((x * 0.001,
+                                                       y * 0.001,
+                                                       z * 0.001))))
+                         for x, y, z in base_pts)
+        same = len(rotated) == len(got) and all(
+            all(abs(a - b) < 1e-4 for a, b in zip(p, q))
+            for p, q in zip(rotated, got))
+        check_true(f"Rz({phi:g}°)·меш(φ=0) == меш(φ={phi:g})", same)
+
+
 def test_full_contact():
     print("--- 3000 мм³ @ 50° (полный контакт) ---")
     res = build_mixed_meniscus(_mw(50.0), 3000.0, return_bmesh=False)
@@ -153,6 +207,8 @@ def main():
     print("Проверка смешанного мениска (clipped-прототип)")
     print(f"R={INNER_RADIUS:.2f} мм, liquid R={LIQUID_RADIUS:.2f} мм")
     test_2000_50()
+    test_closed_2000_50()
+    test_azimuth_rotation()
     test_full_contact()
     test_sweep()
     test_transition()

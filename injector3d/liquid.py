@@ -24,6 +24,7 @@ import math
 from mathutils import Matrix, Vector
 
 from .meniscus import solve_meniscus
+from .meniscus_mixed import build_mixed_liquid
 from .config import (
     MM,
     INNER_RADIUS,
@@ -348,26 +349,32 @@ def _meniscus_valid(mw, level_mm, liquid_props=None):
             and contact_m < spill_level_mm(mw) * MM - 1e-9)
 
 
-def contact_level_mm(mw, level_mm, flat=False, liquid_props=None):
+def contact_level_mm(mw, level_mm, flat=False, liquid_props=None,
+                     mixed=False):
     """Мировой z кромки контакта жидкости со стенкой.
 
-    Для полного эллиптического среза это `level + rise`; при плоском
-    fallback (у дна/перелива) кромка совпадает с уровнем.  `flat=True`
-    заставляет считать поверхность плоской даже там, где мениск
-    формально помещается (переходный объём у дна).
+    Для полного эллиптического среза и смешанного контакта это
+    `level + rise`; при плоском fallback (у дна/перелива) кромка
+    совпадает с уровнем.  `flat=True` заставляет считать поверхность
+    плоской даже там, где мениск формально помещается.
     """
+    if mixed and not flat:
+        return level_mm + meniscus_wall_rise_mm(liquid_props)
     if not flat and _meniscus_valid(mw, level_mm, liquid_props):
         return level_mm + meniscus_wall_rise_mm(liquid_props)
     return level_mm
 
 
-def contact_center_mm(mw, level_mm, flat=False, liquid_props=None):
-    """Центр эллипса кромки контакта в мировых координатах, мм.
+def contact_center_mm(mw, level_mm, flat=False, liquid_props=None,
+                      mixed=False):
+    """Центр эллипса/кромки контакта в мировых координатах, мм.
 
     Большая/малая оси не нужны: для подписи и 2D-маркера достаточно
-    пересечения оси трубки с плоскостью кромки.
+    пересечения оси трубки с плоскостью кромки.  Для смешанного
+    контакта это опорная точка на уровне `level + rise`, а не центр
+    полного эллипса.
     """
-    h_mm = contact_level_mm(mw, level_mm, flat, liquid_props)
+    h_mm = contact_level_mm(mw, level_mm, flat, liquid_props, mixed=mixed)
     z_local = (h_mm * MM - mw[2][3]) / mw[2][2]
     p = mw @ Vector((0.0, 0.0, z_local))
     return (p.x / MM, p.y / MM, p.z / MM)
@@ -525,7 +532,7 @@ def create_liquid(name="Liquid"):
 
 
 def build_liquid(obj, tube, target_mm3, segments=REVOLVE_SEGMENTS,
-                 use_fast=True, liquid_config=None):
+                 use_fast=True, liquid_config=None, use_mixed=True):
     """Перестраивает меш жидкости под текущую ориентацию трубки.
 
     Меш записывается в мировых координатах, поэтому объект жидкости
@@ -535,17 +542,62 @@ def build_liquid(obj, tube, target_mm3, segments=REVOLVE_SEGMENTS,
     (плоское тело + постоянная ΔV_under), а полный меш собирается один
     раз. Финальный объём возвращается по фактическому мешу.
 
-    У дна между плоским fallback и полным мениском есть разрыв объёма.
-    Если целевой объём попал в этот разрыв, строится плоская поверхность
-    с точным объёмом (`flat=True` в результате).
+    Если целевой объём попадает в режим смешанного контакта «стенка + дно»
+    (малое заполнение при сильном наклоне), используется отдельный
+    clipped-солвер `meniscus_mixed.build_mixed_liquid()`: осесимметричный
+    мениск обрезается дном, а меш замыкается по линии контакта.  В
+    остальных режимах работает прежний путь (полный мениск, плоский клин
+    у дна или перелив).  `use_mixed=False` принудительно оставляет старый
+    путь — это полезно для сравнения.
 
     Returns
     -------
-    dict с полями level_mm, volume_mm3, error_mm3, spilled, flat,
+    dict с полями level_mm, volume_mm3, error_mm3, spilled, flat, mixed,
     verts, faces, liquid_type, liquid_config.
     """
     props = _normalize_liquid_props(liquid_config)
     mw = tube.matrix_world.copy()
+
+    if use_mixed:
+        mixed = build_mixed_liquid(
+            mw, target_mm3, liquid_config=props,
+            radial_rings=120, angular_segments=segments,
+            volume_nodes=320, volume_angles=max(384, 2 * segments))
+        if mixed is not None:
+            bm = mixed['bmesh']
+            level = mixed['level_mm']
+            vol = mixed['volume_mm3']
+            spilled = False
+            flat = False
+
+            me = obj.data
+            if bm is None:
+                me.clear_geometry()
+            else:
+                bm.to_mesh(me)
+                bm.free()
+            me.update()
+            obj.matrix_world = Matrix.Identity(4)
+
+            liq_name = (liquid_config.get('name', 'water')
+                        if isinstance(liquid_config, dict) else 'water')
+            return {
+                'level_mm': level,
+                'volume_mm3': vol,
+                'error_mm3': vol - target_mm3,
+                'spilled': spilled,
+                'flat': flat,
+                'mixed': True,
+                'method': 'clipped',
+                'contact_mm': mixed['contact_mm'],
+                'bottom_max_mm': mixed['bottom_max_mm'],
+                'bottom_min_mm': mixed['bottom_min_mm'],
+                'verts': len(me.vertices),
+                'faces': len(me.polygons),
+                'liquid_type': liq_name,
+                'liquid_config': liquid_config,
+            }
+
     level, _solver_vol, spilled = solve_level_for_volume(
         mw, target_mm3, tol_mm3=0.02, segments=segments, fast=use_fast,
         liquid_props=props)
@@ -589,6 +641,8 @@ def build_liquid(obj, tube, target_mm3, segments=REVOLVE_SEGMENTS,
         'error_mm3': vol - target_mm3,
         'spilled': spilled,
         'flat': flat,
+        'mixed': False,
+        'method': 'flat' if flat else 'meniscus',
         'verts': len(me.vertices),
         'faces': len(me.polygons),
         'liquid_type': liq_name,

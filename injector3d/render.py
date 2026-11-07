@@ -389,7 +389,8 @@ def _center_for_info(tube, info):
         return None
     return contact_center_mm(tube.matrix_world, info['level_mm'],
                              flat=info.get('flat', False),
-                             liquid_props=info.get('liquid_config'))
+                             liquid_props=info.get('liquid_config'),
+                             mixed=info.get('mixed', False))
 
 
 def export_scene_glb(filepath, objects=None):

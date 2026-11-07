@@ -419,8 +419,8 @@ class MixedMeniscusSolver:
         bmesh.ops.recalc_face_normals(bm, faces=bm.faces)
         return bm
 
-    def build_liquid_bmesh(self, phi, level_mm, inner_rings=8):
-        """Замкнутый меш жидкости: верх, дно и внешняя стенка.
+    def build_pde_liquid_bmesh(self, phi, level_mm, inner_rings=8):
+        """Замкнутый меш жидкости для 2D-PDE-решения.
 
         Сухие ячейки имеют нулевую толщину; после сварки вершин и удаления
         вырожденных граней остаётся замкнутая смоченная область.  Это
@@ -467,7 +467,14 @@ class MixedMeniscusSolver:
 
     def build_liquid_bmesh(self, level_mm, radial_rings=120,
                            angular_segments=REVOLVE_SEGMENTS):
-        """Замкнутый меш жидкости по обрезанному осесимметричному профилю."""
+        """Замкнутый меш жидкости по обрезанному осесимметричному профилю.
+
+        Строятся верх (свободная поверхность или дно в сухих точках), низ
+        (дно) и боковые стенки по границе смоченной области.  Граница
+        определяется по ячейкам: ребро, которое принадлежит ровно одной
+        смоченной ячейке, замыкается боковой гранью.  Так автоматически
+        закрываются и внешняя стенка `r = R`, и линия контакта на дне.
+        """
         nr = int(radial_rings)
         nt = int(angular_segments)
         r = np.linspace(0.0, self.R, nr + 1)
@@ -476,8 +483,8 @@ class MixedMeniscusSolver:
         phi = self.axisymmetric_phi_mm(level_mm, r)
         B = self.bottom_mm(X, Y)
         top = np.maximum(phi[:, None], B)
-        zl_top = (top - self.tz - self.exz * X - self.eyz * Y) / self.az
-        zl_bot = (B - self.tz - self.exz * X - self.eyz * Y) / self.az
+        thick = top - B
+        eps = 1e-9
 
         bm = bmesh.new()
         ctop = bm.verts.new(self._world_vertex(0.0, 0.0, top[0, 0]))
@@ -493,30 +500,72 @@ class MixedMeniscusSolver:
             top_rings.append(tr)
             bot_rings.append(br)
 
+        def node_id(i, j):
+            return i * nt + j
+
+        def node_ij(node):
+            if node < 0:
+                return 0, 0
+            return divmod(node, nt)
+
+        def vtop(node):
+            if node < 0:
+                return ctop
+            i, j = node_ij(node)
+            return top_rings[i - 1][j]
+
+        def vbot(node):
+            if node < 0:
+                return cbot
+            i, j = node_ij(node)
+            return bot_rings[i - 1][j]
+
+        def node_thick(node):
+            i, j = node_ij(node)
+            return thick[i, j]
+
         def face(vs):
             try:
                 return bm.faces.new(vs)
             except ValueError:
                 return None
 
+        cells = []
         for j in range(nt):
             jn = (j + 1) % nt
-            face((ctop, top_rings[0][j], top_rings[0][jn]))
-            face((cbot, bot_rings[0][jn], bot_rings[0][j]))
-        for i in range(len(top_rings) - 1):
+            cells.append((-1, node_id(1, j), node_id(1, jn)))
+        for i in range(1, nr):
             for j in range(nt):
                 jn = (j + 1) % nt
-                face((top_rings[i][j], top_rings[i][jn],
-                      top_rings[i + 1][jn], top_rings[i + 1][j]))
-                face((bot_rings[i][j], bot_rings[i + 1][j],
-                      bot_rings[i + 1][jn], bot_rings[i][jn]))
-        for j in range(nt):
-            jn = (j + 1) % nt
-            face((top_rings[-1][j], top_rings[-1][jn],
-                  bot_rings[-1][jn], bot_rings[-1][j]))
+                cells.append((node_id(i, j), node_id(i, jn),
+                              node_id(i + 1, jn), node_id(i + 1, j)))
+
+        edge_count = {}
+        edge_rep = {}
+        for nodes in cells:
+            if not any(node_thick(n) > eps for n in nodes):
+                continue
+            face([vtop(n) for n in nodes])
+            face([vbot(n) for n in nodes])
+
+            m = len(nodes)
+            for k in range(m):
+                a = nodes[k]
+                b = nodes[(k + 1) % m]
+                key = (a, b) if a < b else (b, a)
+                edge_count[key] = edge_count.get(key, 0) + 1
+                edge_rep.setdefault(key, (a, b))
+
+        for key, count in edge_count.items():
+            if count != 1:
+                continue
+            a, b = edge_rep[key]
+            if node_thick(a) <= eps and node_thick(b) <= eps:
+                continue
+            face((vtop(a), vtop(b), vbot(b), vbot(a)))
 
         bmesh.ops.remove_doubles(bm, verts=bm.verts, dist=1e-9)
-        degenerate = [f for f in bm.faces if f.calc_area() < 1e-12]
+        degenerate = [f for f in bm.faces if f.calc_area() < 1e-14]
         if degenerate:
             bmesh.ops.delete(bm, geom=degenerate, context='FACES')
         bmesh.ops.recalc_face_normals(bm, faces=bm.faces)
@@ -524,13 +573,67 @@ class MixedMeniscusSolver:
             bmesh.ops.reverse_faces(bm, faces=bm.faces)
         return bm
 
+    def build_liquid_for_target(self, target_mm3, *,
+                                radial_rings=120,
+                                angular_segments=REVOLVE_SEGMENTS,
+                                tol_mm3=0.02, mesh_tol_mm3=0.03,
+                                max_corr=6, level_mm=None,
+                                spilled=None):
+        """Строит замкнутый меш и корректирует уровень по его объёму.
+
+        Точный 1D-объём и объём треугольной сетки немного расходятся.
+        После построения меша уровень уточняется методом Ньютона по
+        фактическому `bm.calc_volume()`, чтобы `validate_liquid()` и
+        целевой объём сходились на одной и той же геометрии.
+        """
+        if level_mm is None:
+            level, _vol1d, spilled = self.solve_level(
+                target_mm3, tol_mm3=tol_mm3)
+            spilled = bool(spilled)
+        else:
+            level = float(level_mm)
+            spilled = bool(spilled)
+        bm = self.build_liquid_bmesh(
+            level, radial_rings=radial_rings,
+            angular_segments=angular_segments)
+        vol = bm.calc_volume(signed=True) / (MM ** 3)
+
+        if not spilled:
+            for _ in range(max_corr):
+                err = vol - target_mm3
+                if abs(err) <= mesh_tol_mm3:
+                    break
+                dl = 0.05
+                v_lo = self.volume_at_level(level - dl)
+                v_hi = self.volume_at_level(level + dl)
+                deriv = (v_hi - v_lo) / (2.0 * dl)
+                if abs(deriv) < 1e-12:
+                    break
+                new_level = level - err / deriv
+                new_level = min(max(new_level,
+                                    self.bottom_min_mm() - 2.0),
+                                self.spill_level_mm())
+                if abs(new_level - level) < 1e-7:
+                    break
+                bm.free()
+                level = new_level
+                bm = self.build_liquid_bmesh(
+                    level, radial_rings=radial_rings,
+                    angular_segments=angular_segments)
+                vol = bm.calc_volume(signed=True) / (MM ** 3)
+
+        mixed = bool(level + self.rise <= self.bottom_max_mm() + 1e-9)
+        flat = bool(level + self.rise <= self.bottom_min_mm() + 1e-9)
+        return bm, float(level), float(vol), bool(spilled), mixed, flat
+
 
 def build_mixed_meniscus(matrix_world, target_volume_mm3,
                          liquid_config=None, *, return_bmesh=True,
                          closed=False, method='clipped',
                          radial_nodes=64, angular_nodes=128,
                          inner_radius_mm=1.0, tol_mm3=0.02,
-                         max_iter=32):
+                         max_iter=32, radial_rings=120,
+                         angular_segments=REVOLVE_SEGMENTS):
     """Строит смешанный мениск под целевой объём.
 
     `method='clipped'` — быстрый и устойчивый прототип: осесимметричный
@@ -553,19 +656,23 @@ def build_mixed_meniscus(matrix_world, target_volume_mm3,
         flat = bool(level + solver.rise <= solver.bottom_min_mm() + 1e-9)
         bm = None
         if return_bmesh:
-            bm = (solver.build_liquid_bmesh(phi, level) if closed
+            bm = (solver.build_pde_liquid_bmesh(phi, level) if closed
                   else solver.build_cap_bmesh(phi, level))
     else:
         solver = ClippedMeniscusSolver(matrix_world, liquid_config)
-        level, vol, spilled = solver.solve_level(
-            target_volume_mm3, tol_mm3=tol_mm3)
-        mixed = bool(level + solver.rise <= solver.bottom_max_mm())
-        flat = bool(level + solver.rise <= solver.bottom_min_mm() + 1e-9)
         if closed:
-            raise NotImplementedError(
-                'замкнутый меш для clipped-прототипа ещё не реализован; '
-                'используйте closed=False (крышка)')
-        bm = solver.build_cap_bmesh(level) if return_bmesh else None
+            bm, level, vol, spilled, mixed, flat =                 solver.build_liquid_for_target(
+                    target_volume_mm3, radial_rings=radial_rings,
+                    angular_segments=angular_segments, tol_mm3=tol_mm3)
+            if not return_bmesh:
+                bm.free()
+                bm = None
+        else:
+            level, vol, spilled = solver.solve_level(
+                target_volume_mm3, tol_mm3=tol_mm3)
+            mixed = bool(level + solver.rise <= solver.bottom_max_mm())
+            flat = bool(level + solver.rise <= solver.bottom_min_mm() + 1e-9)
+            bm = solver.build_cap_bmesh(level) if return_bmesh else None
 
     return {
         'bmesh': bm,
@@ -584,11 +691,14 @@ def build_mixed_meniscus(matrix_world, target_volume_mm3,
         'bottom_contact': None,
         'info': {
             'method': method,
+            'closed': closed,
             'radial_nodes': solver.Nr,
             'angular_nodes': solver.Nt,
             'inner_radius_mm': solver.r0,
             'lambda_mm': solver.lam_mm,
             'rise_mm': solver.rise,
+            'radial_rings': radial_rings if closed else None,
+            'angular_segments': angular_segments if closed else None,
         },
     }
 
@@ -626,10 +736,6 @@ def _validate_2000():
         print(f"{target:7.0f} -> L={r['level_mm']:.6f} "
               f"V={r['volume_mm3']:.4f} mixed={r['mixed']}{step}")
         prev = r['level_mm']
-
-
-if __name__ == '__main__':
-    _validate_2000()
 
 
 class ClippedMeniscusSolver(MixedMeniscusSolver):
@@ -779,3 +885,67 @@ class ClippedMeniscusSolver(MixedMeniscusSolver):
             if nz < 0:
                 bmesh.ops.reverse_faces(bm, faces=bm.faces)
         return bm
+
+
+def build_mixed_liquid(matrix_world, target_volume_mm3, liquid_config=None, *,
+                       radial_rings=120,
+                       angular_segments=REVOLVE_SEGMENTS,
+                       tol_mm3=0.02, mesh_tol_mm3=0.03, max_corr=6,
+                       volume_nodes=320, volume_angles=384):
+    """Замкнутый меш только для режима «стенка + дно».
+
+    Возвращает `None`, если целевой объём не попадает в смешанный режим
+    (полный мениск, плоский клин у дна или перелив): в этих случаях
+    `liquid.build_liquid()` использует старый путь.  Для смешанного
+    режима возвращает bmesh и метаданные, совместимые с `build_liquid()`.
+    """
+    solver = ClippedMeniscusSolver(
+        matrix_world, liquid_config,
+        volume_nodes=volume_nodes, volume_angles=volume_angles)
+    level, _vol1d, spilled = solver.solve_level(
+        target_volume_mm3, tol_mm3=tol_mm3)
+    mixed = bool(level + solver.rise <= solver.bottom_max_mm() + 1e-9)
+    flat = bool(level + solver.rise <= solver.bottom_min_mm() + 1e-9)
+    if spilled or not mixed or flat:
+        return None
+
+    bm, level, vol, spilled, mixed, flat = solver.build_liquid_for_target(
+        target_volume_mm3, radial_rings=radial_rings,
+        angular_segments=angular_segments, tol_mm3=tol_mm3,
+        mesh_tol_mm3=mesh_tol_mm3, max_corr=max_corr,
+        level_mm=level, spilled=spilled)
+    if spilled or not mixed or flat:
+        bm.free()
+        return None
+
+    return {
+        'bmesh': bm,
+        'level_mm': float(level),
+        'volume_mm3': float(vol),
+        'error_mm3': float(vol - target_volume_mm3),
+        'spilled': False,
+        'flat': False,
+        'mixed': True,
+        'rise_mm': float(solver.rise),
+        'contact_mm': float(level + solver.rise),
+        'bottom_max_mm': float(solver.bottom_max_mm()),
+        'bottom_min_mm': float(solver.bottom_min_mm()),
+        'lambda_mm': float(solver.lam_mm),
+        'wall_contact': None,
+        'bottom_contact': None,
+        'info': {
+            'method': 'clipped',
+            'closed': True,
+            'radial_nodes': solver.Nv,
+            'angular_nodes': solver.Nvt,
+            'inner_radius_mm': solver.r0,
+            'lambda_mm': solver.lam_mm,
+            'rise_mm': solver.rise,
+            'radial_rings': radial_rings,
+            'angular_segments': angular_segments,
+        },
+    }
+
+
+if __name__ == '__main__':
+    _validate_2000()

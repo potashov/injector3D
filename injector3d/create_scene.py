@@ -185,11 +185,13 @@ def validate_tube(tube):
 
 
 def validate_liquid(liquid, target_mm3, info):
-    """Валидация объёма жидкости: manifold, объём, горизонтальность кромки.
+    """Валидация объёма жидкости: manifold, объём, положение поверхности.
 
-    Свободная поверхность может быть плоской (fallback у дна/перелива)
-    или менисковой, но её кромка/верх обязана лежать в горизонтальной
-    мировой плоскости — поверхность не наклоняется вместе с трубкой.
+    Свободная поверхность может быть плоской (fallback у дна/перелива),
+    полной менисковой или смешанной (контакт на стенке и дне).  Для
+    плоской и полной поверхности верхняя кромка горизонтальна; у
+    смешанной верхний контур не горизонтален (сухая часть дна может быть
+    выше кромки), поэтому там проверяется положение линии контакта.
     """
     me = liquid.data
     assert len(me.vertices) > 0, "Жидкость: пустой меш"
@@ -201,11 +203,13 @@ def validate_liquid(liquid, target_mm3, info):
     degenerate = [f for f in bm.faces if f.calc_area() <= 1e-15]
     vol_mm3 = bm.calc_volume(signed=True) / (MM ** 3)
 
-    zs = [v.co.z for v in bm.verts]
-    z_top = max(zs)
-    # Верхняя кромка (плоская крышка или кромка мениска) горизонтальна.
-    top_zs = [z for z in zs if abs(z - z_top) < 1e-6]
-    top_thickness_mm = (max(top_zs) - min(top_zs)) / MM
+    mixed = bool(info.get('mixed'))
+    if not mixed:
+        zs = [v.co.z for v in bm.verts]
+        z_top = max(zs)
+        # Верхняя кромка (плоская крышка или кромка мениска) горизонтальна.
+        top_zs = [z for z in zs if abs(z - z_top) < 1e-6]
+        top_thickness_mm = (max(top_zs) - min(top_zs)) / MM
     bm.free()
 
     assert not bad, f"Жидкость: {len(bad)} non-manifold рёбер"
@@ -216,24 +220,45 @@ def validate_liquid(liquid, target_mm3, info):
     assert drift < 2e-4, \
         f"Жидкость: объём {vol_mm3:.2f} мм³ отличается от целевого " \
         f"{target_mm3:.2f} мм³ на {drift * 100:.3f}%"
-    assert top_thickness_mm < 1e-4, \
-        f"Жидкость: верхняя кромка не горизонтальна (толщина {top_thickness_mm} мм)"
 
-    # Верх — либо плоскость на уровне (fallback), либо кромка мениска
-    # на level + подъём у стенки.
-    rise_mm = meniscus_wall_rise_mm(info.get('liquid_config'))
-    offset_mm = z_top / MM - info['level_mm']
-    assert min(abs(offset_mm), abs(offset_mm - rise_mm)) < 1e-3, \
-        f"Жидкость: верх на {offset_mm:.3f} мм от уровня, " \
-        f"ожидалось 0 или {rise_mm:.3f} мм (мениск)"
+    if mixed:
+        contact_mm = info.get('contact_mm')
+        bottom_max_mm = info.get('bottom_max_mm')
+        bottom_min_mm = info.get('bottom_min_mm')
+        assert contact_mm is not None and bottom_max_mm is not None, \
+            "Жидкость: для смешанного мениска нет contact_mm/bottom_max_mm"
+        assert not info.get('flat'), \
+            "Жидкость: mixed-меш не должен быть плоским fallback"
+        assert contact_mm <= bottom_max_mm + 1e-3, \
+            f"Жидкость: кромка {contact_mm:.3f} мм выше дна " \
+            f"{bottom_max_mm:.3f} мм — это не смешанный контакт"
+        if bottom_min_mm is not None:
+            assert contact_mm >= bottom_min_mm - 1e-3, \
+                f"Жидкость: кромка {contact_mm:.3f} мм ниже дна " \
+                f"{bottom_min_mm:.3f} мм"
+    else:
+        # Верх — либо плоскость на уровне (fallback), либо кромка мениска
+        # на level + подъём у стенки.
+        assert top_thickness_mm < 1e-4, \
+            f"Жидкость: верхняя кромка не горизонтальна " \
+            f"(толщина {top_thickness_mm} мм)"
+        rise_mm = meniscus_wall_rise_mm(info.get('liquid_config'))
+        offset_mm = z_top / MM - info['level_mm']
+        assert min(abs(offset_mm), abs(offset_mm - rise_mm)) < 1e-3, \
+            f"Жидкость: верх на {offset_mm:.3f} мм от уровня, " \
+            f"ожидалось 0 или {rise_mm:.3f} мм (мениск)"
 
     print(f"  вершин={info['verts']}  полигонов={info['faces']}  "
           f"non-manifold={len(bad)}")
     print(f"  уровень (мировой z) = {info['level_mm']:.3f} мм, "
           f"объём = {vol_mm3:.2f} мм³ "
           f"(цель {target_mm3:.2f}, ошибка {info['error_mm3']:+.3f})")
-    print(f"  верхняя кромка: z = {z_top / MM:.3f} мм "
-          f"(подъём мениска {offset_mm:.3f} мм)")
+    if mixed:
+        print(f"  смешанный контакт: z = {contact_mm:.3f} мм "
+              f"(дно {bottom_min_mm:.3f}…{bottom_max_mm:.3f} мм)")
+    else:
+        print(f"  верхняя кромка: z = {z_top / MM:.3f} мм "
+              f"(подъём мениска {offset_mm:.3f} мм)")
     return True
 
 
