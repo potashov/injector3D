@@ -36,11 +36,76 @@ ARC_SEGMENTS = 8         # сегментов на каждое скруглен
 # --- Оптика (используется на шаге 4) ---
 IOR_PMMA = 1.49          # оргстекло/акрил
 
-# --- Жидкость (пункт 2) ---
+# --- Жидкость (пункт 2 и 6) ---
 # Доля вместимости полости. Уровень подбирается бисекцией так, чтобы объём
 # совпал при любом наклоне; 0.5 оставлена и выше spill-порога с запасом:
 # при наклоне 30° кромка с ближней стороны опускается до ~75 мм.
 FILL_FRACTION = 0.5
+
+# Пресеты жидкостей (пункт 6): физические параметры для мениска и
+# оптические параметры для Cycles Principled BSDF + Volume Absorption.
+LIQUID_PRESETS = {
+    'water': {
+        'name': 'water',
+        'display_name': 'Water',
+        'ior': 1.333,
+        'density': 1000.0,            # кг/м³
+        'surface_tension': 0.0728,     # Н/м, 20 °C
+        'contact_angle_deg': 25.0,     # град на PMMA
+        'base_color': (1.0, 1.0, 58.0 / 73.0, 1.0),
+        'absorption_color': (1.0, 1.0, 0.42, 1.0),
+        'absorption_density': 20.0,
+    },
+    'glycerol': {
+        'name': 'glycerol',
+        'display_name': 'Glycerol',
+        'ior': 1.473,
+        'density': 1261.0,
+        'surface_tension': 0.0634,
+        'contact_angle_deg': 45.0,
+        'base_color': (1.0, 1.0, 0.95, 1.0),
+        'absorption_color': (1.0, 1.0, 0.85, 1.0),
+        'absorption_density': 8.0,
+    },
+    'ethanol': {
+        'name': 'ethanol',
+        'display_name': 'Ethanol',
+        'ior': 1.361,
+        'density': 789.0,
+        'surface_tension': 0.0223,
+        'contact_angle_deg': 5.0,
+        'base_color': (1.0, 1.0, 1.0, 1.0),
+        'absorption_color': (1.0, 1.0, 1.0, 1.0),
+        'absorption_density': 2.0,
+    },
+    'mineral_oil': {
+        'name': 'mineral_oil',
+        'display_name': 'Mineral Oil',
+        'ior': 1.467,
+        'density': 850.0,
+        'surface_tension': 0.0300,
+        'contact_angle_deg': 35.0,
+        'base_color': (1.0, 0.95, 0.70, 1.0),
+        'absorption_color': (1.0, 0.90, 0.35, 1.0),
+        'absorption_density': 35.0,
+    },
+}
+DEFAULT_LIQUID_TYPE = 'water'
+
+
+def get_liquid_config(preset=None, **overrides):
+    """Возвращает конфигурацию жидкости с учётом возможных переопределений."""
+    preset_name = (preset or DEFAULT_LIQUID_TYPE).lower()
+    if preset_name not in LIQUID_PRESETS:
+        available = ', '.join(sorted(LIQUID_PRESETS.keys()))
+        raise ValueError(
+            f"Неизвестный тип жидкости '{preset_name}'. Доступны: {available}")
+    cfg = dict(LIQUID_PRESETS[preset_name])
+    for k, v in overrides.items():
+        if v is not None:
+            cfg[k] = v
+    return cfg
+
 
 # --- Мениск (пункт 3) ---
 # Осесимметричное решение Юнга-Лапласа (см. meniscus.py):
@@ -49,10 +114,10 @@ FILL_FRACTION = 0.5
 # Нелинейная задача решается численно (РК4 + бисекция по z(0)), поэтому
 # форма мениска получается физической, а не подобранной кривой.
 # Для sigma = 0.0728 Н/м: lambda_c = sqrt(sigma/(rho*g)) = 2.724 мм.
-SURFACE_TENSION = 0.0728    # Н/м, вода при 20 °C
-LIQUID_DENSITY = 1000.0     # кг/м³
+SURFACE_TENSION = LIQUID_PRESETS['water']['surface_tension']
+LIQUID_DENSITY = LIQUID_PRESETS['water']['density']
 GRAVITY = 9.81              # м/с²
-CONTACT_ANGLE_DEG = 25.0    # краевой угол воды на PMMA, через жидкость
+CONTACT_ANGLE_DEG = LIQUID_PRESETS['water']['contact_angle_deg']
 MENISCUS_RINGS = 80         # радиальных узлов свободной поверхности
 MENISCUS_STEPS = 2000        # шагов интегрирования ОДУ
 
@@ -88,6 +153,44 @@ REFERENCE_CAMERA = {
 # Основная сцена использует ту же оптику/расположение, что и референс.
 SCENE_CAMERA = REFERENCE_CAMERA
 RENDER_RESOLUTION = REFERENCE_RESOLUTION
+
+# Пресеты камер (пункт 6):
+#   - reference: близкая широкоугольная камера с дисторсией (OV5693 1.3 мм);
+#   - studio: длиннофокусная студийная камера (85 мм) без дисторсии.
+CAMERA_PRESETS = {
+    'reference': dict(REFERENCE_CAMERA),
+    'studio': {
+        'lens_mm': 85.0,
+        'sensor_width_mm': 36.0,
+        'sensor_height_mm': 24.0,
+        'distance_mm': 350.0,
+        'target_z_mm': 46.0,
+        'camera_z_mm': 46.0,
+        'roll_deg': 0.0,
+        'fstop': 5.6,
+        'distortion': 0.0,
+        'shift_x_px': 0,
+        'target_height_px': 0,
+        'samples': 128,
+    },
+}
+DEFAULT_CAMERA_PRESET = 'reference'
+
+
+def get_camera_config(preset=None, **overrides):
+    """Возвращает конфигурацию камеры с учётом возможных переопределений."""
+    preset_name = (preset or DEFAULT_CAMERA_PRESET).lower()
+    if preset_name not in CAMERA_PRESETS:
+        available = ', '.join(sorted(CAMERA_PRESETS.keys()))
+        raise ValueError(
+            f"Неизвестный пресет камеры '{preset_name}'. Доступны: {available}")
+    cfg = dict(CAMERA_PRESETS[preset_name])
+    for k, v in overrides.items():
+        if v is not None:
+            cfg[k] = v
+    return cfg
+
+
 # Для серии из 5 наклонов трубка смещена вправо на 105 px — это безопасно,
 # так как камера привязана к трубке и не уходит за границу кадра.
 SCENE_POSTPROCESS = {
@@ -108,6 +211,7 @@ SCENE_OVERLAY = {
     'tilt_deg': False,
     'ellipse_center': False,
     'center_marker': False,
+    'liquid': False,
     'font_path': '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',
     'font_size_px': 18,
     'margin_px': 12,

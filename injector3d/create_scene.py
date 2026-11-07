@@ -33,7 +33,7 @@ from injector3d.liquid import (
     target_volume_mm3,
 )
 from injector3d.scene import setup_scene, attach_camera_to_tube
-from injector3d.render import render_tube, render_ring, tilt_matrix
+from injector3d.render import render_tube, render_ring, tilt_matrix, export_scene_glb
 from injector3d import config as cfg
 from injector3d.config import (
     INNER_DIAMETER,
@@ -41,6 +41,8 @@ from injector3d.config import (
     WALL_THICKNESS,
     MM,
     RENDER_RESOLUTION,
+    get_liquid_config,
+    get_camera_config,
 )
 
 
@@ -120,6 +122,10 @@ def parse_render_options(tail):
             overlay['center_marker'] = True
         elif arg == '--no-center-marker':
             overlay['center_marker'] = False
+        elif arg == '--overlay-liquid':
+            overlay['liquid'] = True
+        elif arg == '--no-overlay-liquid':
+            overlay['liquid'] = False
         i += 1
     return postprocess, overlay
 
@@ -236,7 +242,7 @@ def validate_liquid(liquid, target_mm3, info):
 
     # Верх — либо плоскость на уровне (fallback), либо кромка мениска
     # на level + подъём у стенки.
-    rise_mm = meniscus_wall_rise_mm()
+    rise_mm = meniscus_wall_rise_mm(info.get('liquid_config'))
     offset_mm = z_top / MM - info['level_mm']
     assert min(abs(offset_mm), abs(offset_mm - rise_mm)) < 1e-3, \
         f"Жидкость: верх на {offset_mm:.3f} мм от уровня, " \
@@ -266,6 +272,25 @@ def main():
     shard_count = 1
     timestamp = None
     tag = None
+
+    # Новые параметры пункта 6: жидкость, камера, экспорт
+    liquid_type = None
+    liquid_ior = None
+    liquid_density = None
+    surface_tension = None
+    contact_angle = None
+    absorption_density = None
+
+    camera_preset = None
+    camera_distance = None
+    camera_z = None
+    camera_target_z = None
+    camera_lens = None
+    camera_roll = None
+    camera_distortion = None
+
+    export_glb_path = None
+
     argv = sys.argv
     tail = []
     if "--" in argv:
@@ -309,8 +334,87 @@ def main():
             tag = tail[i + 1]
             i += 2
             continue
+        if arg == '--liquid-type' and i + 1 < len(tail):
+            liquid_type = tail[i + 1]
+            i += 2
+            continue
+        if arg == '--liquid-ior' and i + 1 < len(tail):
+            liquid_ior = float(tail[i + 1])
+            i += 2
+            continue
+        if arg == '--liquid-density' and i + 1 < len(tail):
+            liquid_density = float(tail[i + 1])
+            i += 2
+            continue
+        if arg == '--surface-tension' and i + 1 < len(tail):
+            surface_tension = float(tail[i + 1])
+            i += 2
+            continue
+        if arg == '--contact-angle' and i + 1 < len(tail):
+            contact_angle = float(tail[i + 1])
+            i += 2
+            continue
+        if arg == '--absorption-density' and i + 1 < len(tail):
+            absorption_density = float(tail[i + 1])
+            i += 2
+            continue
+        if arg == '--camera-preset' and i + 1 < len(tail):
+            camera_preset = tail[i + 1]
+            i += 2
+            continue
+        if arg == '--camera-distance' and i + 1 < len(tail):
+            camera_distance = float(tail[i + 1])
+            i += 2
+            continue
+        if arg == '--camera-z' and i + 1 < len(tail):
+            camera_z = float(tail[i + 1])
+            i += 2
+            continue
+        if arg == '--camera-target-z' and i + 1 < len(tail):
+            camera_target_z = float(tail[i + 1])
+            i += 2
+            continue
+        if arg == '--camera-lens' and i + 1 < len(tail):
+            camera_lens = float(tail[i + 1])
+            i += 2
+            continue
+        if arg == '--camera-roll' and i + 1 < len(tail):
+            camera_roll = float(tail[i + 1])
+            i += 2
+            continue
+        if arg == '--camera-distortion' and i + 1 < len(tail):
+            camera_distortion = float(tail[i + 1])
+            i += 2
+            continue
+        if arg == '--export-glb':
+            if i + 1 < len(tail) and not tail[i + 1].startswith('--'):
+                export_glb_path = tail[i + 1]
+                i += 2
+            else:
+                export_glb_path = True
+                i += 1
+            continue
         i += 1
     postprocess, overlay = parse_render_options(tail)
+
+    liquid_config = get_liquid_config(
+        preset=liquid_type,
+        ior=liquid_ior,
+        density=liquid_density,
+        surface_tension=surface_tension,
+        contact_angle_deg=contact_angle,
+        absorption_density=absorption_density,
+    )
+    camera_config = get_camera_config(
+        preset=camera_preset,
+        distance_mm=camera_distance,
+        camera_z_mm=camera_z,
+        target_z_mm=camera_target_z,
+        lens_mm=camera_lens,
+        roll_deg=camera_roll,
+        distortion=camera_distortion,
+    )
+
     if fill_fraction is not None and volume_mm3 is not None:
         raise SystemExit(
             'Ошибка: --fill-fraction и --volume-mm3 взаимоисключающие'
@@ -347,7 +451,7 @@ def main():
 
     # 1. Сцена
     print("1/5  Настройка сцены...")
-    camera = setup_scene(gpu_index=gpu_index)
+    camera = setup_scene(gpu_index=gpu_index, camera_config=camera_config)
     print("   ✅ Сцена готова.\n")
 
     # 2. Геометрия
@@ -377,11 +481,13 @@ def main():
 
         if with_materials:
             mat_plastic = create_material_plastic("Plastic")
-            mat_liquid = create_material_liquid("Liquid")
+            mat_liquid = create_material_liquid("Liquid", liquid_config=liquid_config)
             tube.data.materials.append(mat_plastic)
             liquid.data.materials.append(mat_liquid)
             print(f"   ✅ Трубка: {tube.data.materials[0].name} "
                   f"(IOR={cfg.IOR_PMMA}, transmission=1.0, roughness=0.0)")
+            print(f"   ✅ Жидкость ({liquid_config.get('display_name', 'Liquid')}): "
+                  f"IOR={liquid_config['ior']}, absorption density={liquid_config['absorption_density']}")
         else:
             print("   ⏭  Материалы: подключаются с пункта 4")
 
@@ -403,14 +509,16 @@ def main():
             attach_camera_to_tube(camera, tube)
 
             # 1) upright-меш: трубка вертикальна
-            info_up = build_liquid(liquid, tube, target_mm3, use_fast=True)
+            info_up = build_liquid(liquid, tube, target_mm3, use_fast=True,
+                                   liquid_config=liquid_config)
             liquid_upright = _dup_mesh_object(liquid)
             liquid_upright.name = "Liquid_upright"
 
             # 2) наклонный меш при φ = 0: наклон θ вокруг точки опоры
             tube.matrix_world = tilt_matrix(math.radians(angle), 0.0)
             bpy.context.view_layer.update()
-            info_t = build_liquid(liquid, tube, target_mm3, use_fast=True)
+            info_t = build_liquid(liquid, tube, target_mm3, use_fast=True,
+                                  liquid_config=liquid_config)
             liquid_tilted = _dup_mesh_object(liquid)
             liquid_tilted.name = "Liquid_tilted"
 
@@ -433,7 +541,8 @@ def main():
         else:
             # Обычный рендер: перестраиваем жидкость на каждый наклон
             def on_tilt(variant_name, tilt_euler):
-                info = build_liquid(liquid, tube, target_mm3)
+                info = build_liquid(liquid, tube, target_mm3,
+                                    liquid_config=liquid_config)
                 flag = "  ⚠ переливается" if info['spilled'] else ""
                 print(f"     {variant_name:<9} наклон {tilt_euler} -> "
                       f"уровень {info['level_mm']:7.3f} мм, "
@@ -449,11 +558,26 @@ def main():
                   f"объём {info['volume_mm3']:.2f} мм³")
             if with_materials:
                 print(f"   ✅ Жидкость: {liquid.data.materials[0].name} "
-                      "(IOR=1.33, absorption density=20.0)")
+                      f"(IOR={liquid_config['ior']}, absorption density={liquid_config['absorption_density']})")
             validate_liquid(liquid, target_mm3, info)
     print("   ✅ Готово.\n")
 
-    # 5. Рендер
+    # 5. Экспорт GLB (если запрошен)
+    if export_glb_path:
+        if export_glb_path is True:
+            glb_ts = timestamp or time.strftime('%Y%m%d_%H%M%S')
+            tag_part = f'_{tag}' if tag else ''
+            export_glb_path = os.path.join(
+                cfg.OUTPUT_DIR, step, f'{step}{tag_part}_{glb_ts}.glb')
+        objs_to_export = [tube]
+        if is_ring:
+            if liquid_upright:
+                objs_to_export.append(liquid_upright)
+        elif liquid:
+            objs_to_export.append(liquid)
+        export_scene_glb(export_glb_path, objects=objs_to_export)
+
+    # 6. Рендер
     if is_ring:
         n = n_tilt if n_tilt is not None else cfg.TILT_AZIMUTH_COUNT
         angle = angle_tilt if angle_tilt is not None else cfg.TILT_ANGLE_DEG

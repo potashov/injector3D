@@ -80,9 +80,11 @@ def setup_render_devices(gpu_index=None):
     return gpus
 
 
-def setup_scene(gpu_index=None):
+def setup_scene(gpu_index=None, camera_config=None):
     """Создаёт чистую сцену, настраивает Cycles, камеру, свет, фон."""
     bpy.ops.wm.read_factory_settings(use_empty=True)
+
+    p = dict(camera_config or SCENE_CAMERA)
 
     # ---- Включаем аддон Cycles ----
     addon_utils.enable('cycles', default_set=True)
@@ -93,7 +95,7 @@ def setup_scene(gpu_index=None):
     # Без активных GPU-устройств оставляем CPU: с device='GPU' и пустым
     # списком устройств Cycles отвечает «no compatible GPU device found».
     sc.cycles.device = ('GPU' if setup_render_devices(gpu_index) else 'CPU')
-    sc.cycles.samples = RENDER_SAMPLES
+    sc.cycles.samples = p.get('samples', RENDER_SAMPLES)
     sc.cycles.preview_samples = 32
     sc.cycles.caustics_reflective = True
     sc.cycles.caustics_refractive = True
@@ -136,14 +138,14 @@ def setup_scene(gpu_index=None):
     if _safe_set(sc.cycles, 'use_auto_tile', False):
         _safe_set(sc.cycles, 'tile_size', TILE_SIZE)
 
-    # Камера: та же оптика и ракурс, что у референса 06120
-    p = SCENE_CAMERA
+    # Камера: та же оптика и ракурс, что в p (по умолчанию референс 06120)
     target = Vector((0.0, 0.0, p['target_z_mm'] * MM))
     location = Vector((0.0, -p['distance_mm'] * MM,
                        p['camera_z_mm'] * MM))
     bpy.ops.object.camera_add(location=location)
     cam = bpy.context.active_object
     cam.name = 'Camera'
+    cam['config'] = dict(p)
     cam.data.lens = p['lens_mm']
     cam.data.sensor_width = p['sensor_width_mm']
     cam.data.sensor_height = p['sensor_height_mm']

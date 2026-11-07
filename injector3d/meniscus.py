@@ -45,7 +45,7 @@ COS = math.cos(CONTACT_ANGLE)
 ANALYTIC_DELTA_V_MM3 = 2 * math.pi * CAP_LAMBDA_MM ** 2 * INNER_RADIUS * COS
 
 
-def _deriv_y(r, y):
+def _deriv_y(r, y, lambda_mm=CAP_LAMBDA_MM):
     """Правая часть системы: y = [ζ, F],  F = r·ζ′/sqrt(1+ζ′²).
 
         dζ/dr = F / sqrt(r² − F²)
@@ -68,16 +68,16 @@ def _deriv_y(r, y):
         return 0.0, 0.0
     sq = r * r - F * F
     if sq <= 0.0:
-        # |F| → r означает ζ′ → ∞: решение «опрокинулось», выход за
-        # пределы физической ветви.  Держим F, интегрируем дальше.
-        return 0.0, -r * zeta / CAP_LAMBDA_MM ** 2
-    return F / math.sqrt(sq), r * zeta / CAP_LAMBDA_MM ** 2
+        # |F| → r означает ζ′ → ∞: решение «опрокинулось».
+        return 0.0, r * zeta / lambda_mm ** 2
+    return F / math.sqrt(sq), r * zeta / lambda_mm ** 2
 
 
-def _solve_ivp(zeta0, r_end, nsteps):
+def _solve_ivp(zeta0, r_end, nsteps, lambda_mm=CAP_LAMBDA_MM):
     """РК4 от r=0 до r_end.
 
-    Возвращает (r_arr, zeta_arr, F_arr).
+    Возвращает (r_arr, zeta_arr, F_arr, tipped).
+    tipped=True, если решение опрокинулось (|F| >= r) до границы.
     """
     h = r_end / nsteps
     r, zeta, F = 0.0, zeta0, 0.0
@@ -86,21 +86,23 @@ def _solve_ivp(zeta0, r_end, nsteps):
     for _ in range(nsteps):
         if r > r_end - 1e-15:
             break
+        if r > 1e-6 and abs(F) >= r:
+            return rs, zs, Fs, True
 
         # k1
-        k1 = _deriv_y(r, (zeta, F))
+        k1 = _deriv_y(r, (zeta, F), lambda_mm)
 
         # k2
         y2 = (zeta + 0.5 * h * k1[0], F + 0.5 * h * k1[1])
-        k2 = _deriv_y(r + 0.5 * h, y2)
+        k2 = _deriv_y(r + 0.5 * h, y2, lambda_mm)
 
         # k3
         y3 = (zeta + 0.5 * h * k2[0], F + 0.5 * h * k2[1])
-        k3 = _deriv_y(r + 0.5 * h, y3)
+        k3 = _deriv_y(r + 0.5 * h, y3, lambda_mm)
 
         # k4
         y4 = (zeta + h * k3[0], F + h * k3[1])
-        k4 = _deriv_y(r + h, y4)
+        k4 = _deriv_y(r + h, y4, lambda_mm)
 
         zeta += h / 6.0 * (k1[0] + 2 * k2[0] + 2 * k3[0] + k4[0])
         F += h / 6.0 * (k1[1] + 2 * k2[1] + 2 * k3[1] + k4[1])
@@ -109,20 +111,37 @@ def _solve_ivp(zeta0, r_end, nsteps):
         zs.append(zeta)
         Fs.append(F)
 
-    return rs, zs, Fs
+    return rs, zs, Fs, False
 
 
-def solve_meniscus(R=INNER_RADIUS, nsteps=MENISCUS_STEPS):
-    """Задача Юнга-Лапласа для трубки радиуса R.
+def solve_meniscus(R=INNER_RADIUS, nsteps=MENISCUS_STEPS,
+                   surface_tension=None, liquid_density=None,
+                   contact_angle_deg=None):
+    """Задача Юнга-Лапласа для трубки радиуса R и заданных свойств жидкости.
 
     Returns
     -------
     dict с полями:
         h0 — подъём у стенки (мм),
         r, z, F — массивы координат,
-        delta_V_mm3 — объём мениска (должен совпадать с ANALYTIC_DELTA_V_MM3),
+        delta_V_mm3 — объём мениска (должен совпадать с delta_V_analytic),
+        delta_V_analytic — аналитический объём (2π λ² R cos θ),
         d_net — объём юбки относительно плоскости ζ(0),
+        lambda_mm — капиллярная длина (мм),
+        contact_angle_deg — краевой угол (град).
     """
+    st = SURFACE_TENSION if surface_tension is None else float(surface_tension)
+    rho = LIQUID_DENSITY if liquid_density is None else float(liquid_density)
+    theta_deg = CONTACT_ANGLE_DEG if contact_angle_deg is None else float(contact_angle_deg)
+    # Ограничиваем угол в физическом смачивающем диапазоне (0, 90)
+    theta_deg = max(0.5, min(89.5, theta_deg))
+
+    lambda_mm = math.sqrt(st / (rho * GRAVITY)) * 1000.0
+    theta_rad = math.radians(theta_deg)
+    ctg = math.cos(theta_rad) / math.sin(theta_rad)
+    cos_val = math.cos(theta_rad)
+    analytic_dV = 2 * math.pi * lambda_mm ** 2 * R * cos_val
+
     # Бисекция ζ(0) по краевому условию ζ′(R) = ctg(θ).
     #
     # objective(ζ₀) = ζ′(R) **возрастает** по ζ₀: при ζ₀ = 0 решение
@@ -131,37 +150,38 @@ def solve_meniscus(R=INNER_RADIUS, nsteps=MENISCUS_STEPS):
     # CTG > 0, поэтому корень лежит в (0, ∞).
 
     def objective(zeta0):
-        _, _, Fs = _solve_ivp(zeta0, R, nsteps)
-        F_R = Fs[-1]
-        sq = R * R - F_R * F_R
+        rs, zs, Fs, tipped = _solve_ivp(zeta0, R, nsteps, lambda_mm)
+        if tipped or Fs[-1] >= R:
+            return 1e9  # F → R, ζ′ → ∞ или опрокидывание
+        sq = R * R - Fs[-1] * Fs[-1]
         if sq <= 0:
-            return 1e6  # F → R, ζ′ → ∞
-        return F_R / math.sqrt(sq)
+            return 1e9
+        return Fs[-1] / math.sqrt(sq)
 
-    # Подбираем границы: z_lo = 0, z_hi = 2^k пока objective(z_hi) < CTG.
+    # Подбираем границы: z_lo = 0, z_hi = 2^k пока objective(z_hi) < ctg.
     z_lo, z_hi = 0.0, 0.5
     for _ in range(64):
         val = objective(z_hi)
-        if val > CTG:
+        if val > ctg:
             break
         z_hi *= 2.0
     else:
         raise RuntimeError(
             f"не удалось заключить корень: objective({z_hi}) "
-            f"= {objective(z_hi)} при CTG = {CTG}")
+            f"= {objective(z_hi)} при ctg = {ctg}")
 
     for _ in range(64):
         z_mid = 0.5 * (z_lo + z_hi)
         val = objective(z_mid)
-        if abs(val - CTG) < 1e-12:
+        if abs(val - ctg) < 1e-12:
             z_lo = z_hi = z_mid
             break
-        if val < CTG:
+        if val < ctg:
             z_lo = z_mid
         else:
             z_hi = z_mid
 
-    rs, zs, Fs = _solve_ivp(z_lo, R, nsteps)
+    rs, zs, Fs, _ = _solve_ivp(z_lo, R, nsteps, lambda_mm)
     h0 = zs[-1]
 
     # Численный объём мениска (для сверки с аналитическим)
@@ -186,6 +206,8 @@ def solve_meniscus(R=INNER_RADIUS, nsteps=MENISCUS_STEPS):
         'z': zs,
         'F': Fs,
         'delta_V_mm3': delta_v,
-        'delta_V_analytic': ANALYTIC_DELTA_V_MM3,
+        'delta_V_analytic': analytic_dV,
         'd_net': d_net,
+        'lambda_mm': lambda_mm,
+        'contact_angle_deg': theta_deg,
     }

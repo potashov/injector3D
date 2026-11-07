@@ -31,6 +31,9 @@ from .config import (
     BOTTOM_THICKNESS,
     REVOLVE_SEGMENTS,
     MENISCUS_RINGS,
+    SURFACE_TENSION,
+    LIQUID_DENSITY,
+    CONTACT_ANGLE_DEG,
 )
 
 # Зазор отделяет поверхность жидкости от внутренней стенки трубки: в Cycles
@@ -41,6 +44,23 @@ CLEARANCE = 0.02
 # Мениск решаем для фактического радиуса меша жидкости, а не номинального
 # внутреннего радиуса трубки: иначе объём мениска систематически завышался бы.
 MENISCUS_RADIUS = INNER_RADIUS - CLEARANCE
+
+
+def _normalize_liquid_props(liquid_config_or_props):
+    """Нормализует конфигурацию/свойства жидкости в кортеж:
+    (surface_tension, liquid_density, contact_angle_deg).
+    """
+    if liquid_config_or_props is None:
+        return (SURFACE_TENSION, LIQUID_DENSITY, CONTACT_ANGLE_DEG)
+    if isinstance(liquid_config_or_props, tuple):
+        return liquid_config_or_props
+    if isinstance(liquid_config_or_props, dict):
+        return (
+            float(liquid_config_or_props.get('surface_tension', SURFACE_TENSION)),
+            float(liquid_config_or_props.get('density', LIQUID_DENSITY)),
+            float(liquid_config_or_props.get('contact_angle_deg', CONTACT_ANGLE_DEG)),
+        )
+    return (SURFACE_TENSION, LIQUID_DENSITY, CONTACT_ANGLE_DEG)
 
 
 def capacity_mm3():
@@ -69,11 +89,17 @@ _MENISCUS_CACHE = {}
 _MENISCUS_TEMPLATE_CACHE = {}
 
 
-def _meniscus_profile(R_mm):
+def _meniscus_profile(R_mm, liquid_props=None):
     """Кэшированное решение Юнга-Лапласа: dict с r, z, delta_V_mm3."""
-    key = round(R_mm, 9)
+    props = _normalize_liquid_props(liquid_props)
+    key = (round(R_mm, 9), props)
     if key not in _MENISCUS_CACHE:
-        _MENISCUS_CACHE[key] = solve_meniscus(R_mm)
+        _MENISCUS_CACHE[key] = solve_meniscus(
+            R_mm,
+            surface_tension=props[0],
+            liquid_density=props[1],
+            contact_angle_deg=props[2],
+        )
     return _MENISCUS_CACHE[key]
 
 
@@ -89,23 +115,23 @@ def _zeta_at(prof, r_mm):
     return zs[i] + t * (zs[i + 1] - zs[i])
 
 
-def meniscus_wall_rise_mm():
+def meniscus_wall_rise_mm(liquid_props=None):
     """Подъём жидкости у стенки относительно уровня на оси, мм."""
-    prof = _meniscus_profile(MENISCUS_RADIUS)
+    prof = _meniscus_profile(MENISCUS_RADIUS, liquid_props)
     return prof['z'][-1] - prof['z'][0]
 
 
-def meniscus_volume_mm3():
+def meniscus_volume_mm3(liquid_props=None):
     """Объём жидкости между плоскостью уровня на оси и мениском, мм³."""
-    return _meniscus_profile(MENISCUS_RADIUS)['d_net']
+    return _meniscus_profile(MENISCUS_RADIUS, liquid_props)['d_net']
 
 
-def _meniscus_rise_mm(distance_mm):
+def _meniscus_rise_mm(distance_mm, liquid_props=None):
     """Подъём свободной поверхности на расстоянии от стенки, мм.
 
     distance_mm = 0 у стенки (максимальный подъём), растёт к оси.
     """
-    prof = _meniscus_profile(MENISCUS_RADIUS)
+    prof = _meniscus_profile(MENISCUS_RADIUS, liquid_props)
     r_mm = MENISCUS_RADIUS - max(0.0, distance_mm)
     return _zeta_at(prof, r_mm) - prof['z'][0]
 
@@ -147,7 +173,8 @@ def _build_flat_bmesh(mw, level_mm, segments):
     return bm
 
 
-def _build_meniscus_bmesh(mw, level_mm, segments, rings=MENISCUS_RINGS):
+def _build_meniscus_bmesh(mw, level_mm, segments, rings=MENISCUS_RINGS,
+                         liquid_props=None):
     """Меш жидкости с мениском, сохраняющим мировой горизонт.
 
     level_mm — мировой уровень жидкости на оси (мм).
@@ -159,7 +186,7 @@ def _build_meniscus_bmesh(mw, level_mm, segments, rings=MENISCUS_RINGS):
     поэтому при наклоне трубки поверхность не наклоняется вместе с ней,
     а мениск подстраивается под эллиптическую кромку.
     """
-    rise_mm = meniscus_wall_rise_mm()
+    rise_mm = meniscus_wall_rise_mm(liquid_props)
     contact_mm = level_mm + rise_mm
     contact_m = contact_mm * MM
 
@@ -208,7 +235,7 @@ def _build_meniscus_bmesh(mw, level_mm, segments, rings=MENISCUS_RINGS):
             px = cx + s * (bv.co.x - cx)
             py = cy + s * (bv.co.y - cy)
             d_mm = (1.0 - s) * dist_mm[j]
-            pz = (level_mm + _meniscus_rise_mm(d_mm)) * MM
+            pz = (level_mm + _meniscus_rise_mm(d_mm, liquid_props)) * MM
             ring.append(bm.verts.new((px, py, pz)))
 
         if ring_prev is None:
@@ -237,20 +264,20 @@ def _build_meniscus_bmesh(mw, level_mm, segments, rings=MENISCUS_RINGS):
     return bm
 
 
-def _liquid_bmesh(mw, level_mm, segments):
+def _liquid_bmesh(mw, level_mm, segments, liquid_props=None):
     """Построение меша жидкости (плоский или менисковый)."""
     if level_mm <= bottom_level_min_mm(mw) + 1e-9:
         return None
     if level_mm >= HEIGHT - CLEARANCE:
         return _build_flat_bmesh(mw, level_mm, segments)
-    return _build_meniscus_bmesh(mw, level_mm, segments)
+    return _build_meniscus_bmesh(mw, level_mm, segments, liquid_props=liquid_props)
 
 
 # --- Объём ---
 
-def volume_at_level(mw, level_mm, segments=REVOLVE_SEGMENTS):
+def volume_at_level(mw, level_mm, segments=REVOLVE_SEGMENTS, liquid_props=None):
     """Объём жидкости (мм³) при мировом уровне level_mm."""
-    bm = _liquid_bmesh(mw, level_mm, segments)
+    bm = _liquid_bmesh(mw, level_mm, segments, liquid_props=liquid_props)
     if bm is None:
         return 0.0
     vol = bm.calc_volume(signed=True) / (MM ** 3)
@@ -282,9 +309,9 @@ def bottom_level_min_mm(mw):
     return (mw[2][3] + mw[2][2] * z0_m - r_liq_m * slope) / MM
 
 
-def _meniscus_valid(mw, level_mm):
+def _meniscus_valid(mw, level_mm, liquid_props=None):
     """Полный эллиптический срез: кромка не у дна и не у перелива."""
-    contact_m = (level_mm + meniscus_wall_rise_mm()) * MM
+    contact_m = (level_mm + meniscus_wall_rise_mm(liquid_props)) * MM
     z0_m = (BOTTOM_THICKNESS + CLEARANCE) * MM
     r_liq_m = (INNER_RADIUS - CLEARANCE) * MM
     slope = math.hypot(mw[2][0], mw[2][1])
@@ -293,7 +320,7 @@ def _meniscus_valid(mw, level_mm):
             and contact_m < spill_level_mm(mw) * MM - 1e-9)
 
 
-def contact_level_mm(mw, level_mm, flat=False):
+def contact_level_mm(mw, level_mm, flat=False, liquid_props=None):
     """Мировой z кромки контакта жидкости со стенкой.
 
     Для полного эллиптического среза это `level + rise`; при плоском
@@ -301,33 +328,35 @@ def contact_level_mm(mw, level_mm, flat=False):
     заставляет считать поверхность плоской даже там, где мениск
     формально помещается (переходный объём у дна).
     """
-    if not flat and _meniscus_valid(mw, level_mm):
-        return level_mm + meniscus_wall_rise_mm()
+    if not flat and _meniscus_valid(mw, level_mm, liquid_props):
+        return level_mm + meniscus_wall_rise_mm(liquid_props)
     return level_mm
 
 
-def contact_center_mm(mw, level_mm, flat=False):
+def contact_center_mm(mw, level_mm, flat=False, liquid_props=None):
     """Центр эллипса кромки контакта в мировых координатах, мм.
 
     Большая/малая оси не нужны: для подписи и 2D-маркера достаточно
     пересечения оси трубки с плоскостью кромки.
     """
-    h_mm = contact_level_mm(mw, level_mm, flat)
+    h_mm = contact_level_mm(mw, level_mm, flat, liquid_props)
     z_local = (h_mm * MM - mw[2][3]) / mw[2][2]
     p = mw @ Vector((0.0, 0.0, z_local))
     return (p.x / MM, p.y / MM, p.z / MM)
 
 
-def _template_key(mw, segments, rings):
-    """Ключ шаблона: ориентация + дискретизация."""
+def _template_key(mw, segments, rings, liquid_props=None):
+    """Ключ шаблона: ориентация + дискретизация + свойства жидкости."""
+    props = _normalize_liquid_props(liquid_props)
     return (
         tuple(round(float(mw[i][j]), 9) for i in range(4) for j in range(4)),
         int(segments),
         int(rings),
+        props,
     )
 
 
-def _meniscus_template(mw, segments, rings):
+def _meniscus_template(mw, segments, rings, liquid_props=None):
     """Шаблон мениска для данной ориентации трубки.
 
     Форма эллиптической кромки не зависит от уровня, пока срез идёт по
@@ -341,20 +370,20 @@ def _meniscus_template(mw, segments, rings):
         {'rise', 'delta_under', 'level0'} или None, если мениск на этой
         ориентации не помещается (у дна/перелива).
     """
-    key = _template_key(mw, segments, rings)
+    key = _template_key(mw, segments, rings, liquid_props)
     if key in _MENISCUS_TEMPLATE_CACHE:
         return _MENISCUS_TEMPLATE_CACHE[key]
 
     lo = bottom_level_min_mm(mw)
     hi = spill_level_mm(mw)
     level = 0.5 * (lo + hi)
-    if not _meniscus_valid(mw, level):
-        level = hi - meniscus_wall_rise_mm() - 1e-3
-    if not _meniscus_valid(mw, level):
+    if not _meniscus_valid(mw, level, liquid_props):
+        level = hi - meniscus_wall_rise_mm(liquid_props) - 1e-3
+    if not _meniscus_valid(mw, level, liquid_props):
         _MENISCUS_TEMPLATE_CACHE[key] = None
         return None
 
-    rise = meniscus_wall_rise_mm()
+    rise = meniscus_wall_rise_mm(liquid_props)
     contact = level + rise
 
     bm_flat = _build_flat_bmesh(mw, contact, segments)
@@ -364,7 +393,7 @@ def _meniscus_template(mw, segments, rings):
     v_flat = bm_flat.calc_volume(signed=True) / (MM ** 3)
     bm_flat.free()
 
-    bm_men = _build_meniscus_bmesh(mw, level, segments, rings)
+    bm_men = _build_meniscus_bmesh(mw, level, segments, rings, liquid_props)
     if bm_men is None:
         _MENISCUS_TEMPLATE_CACHE[key] = None
         return None
@@ -382,15 +411,15 @@ def _meniscus_template(mw, segments, rings):
 
 
 def fast_volume_at_level(mw, level_mm, segments=REVOLVE_SEGMENTS,
-                         rings=MENISCUS_RINGS):
+                         rings=MENISCUS_RINGS, liquid_props=None):
     """Объём через плоское тело и постоянную поправку мениска.
 
     Использует шаблон мениска; вне полного эллиптического среза
     возвращается к точному `volume_at_level()`.
     """
-    template = _meniscus_template(mw, segments, rings)
-    if template is None or not _meniscus_valid(mw, level_mm):
-        return volume_at_level(mw, level_mm, segments)
+    template = _meniscus_template(mw, segments, rings, liquid_props)
+    if template is None or not _meniscus_valid(mw, level_mm, liquid_props):
+        return volume_at_level(mw, level_mm, segments, liquid_props)
 
     contact = level_mm + template['rise']
     bm = _build_flat_bmesh(mw, contact, segments)
@@ -406,7 +435,8 @@ def solve_level_for_volume(mw, target_mm3,
                            segments=REVOLVE_SEGMENTS,
                            fast=False,
                            rings=MENISCUS_RINGS,
-                           flat=False):
+                           flat=False,
+                           liquid_props=None):
     """Бисекция мирового уровня по целевому объёму.
 
     При `fast=True` используется кэшированный шаблон мениска: объём
@@ -436,8 +466,8 @@ def solve_level_for_volume(mw, target_mm3,
             bm.free()
             return vol
         if fast:
-            return fast_volume_at_level(mw, level, segments, rings)
-        return volume_at_level(mw, level, segments)
+            return fast_volume_at_level(mw, level, segments, rings, liquid_props)
+        return volume_at_level(mw, level, segments, liquid_props)
 
     v_hi = volume_fn(hi)
     if target_mm3 >= v_hi:
@@ -467,7 +497,7 @@ def create_liquid(name="Liquid"):
 
 
 def build_liquid(obj, tube, target_mm3, segments=REVOLVE_SEGMENTS,
-                 use_fast=True):
+                 use_fast=True, liquid_config=None):
     """Перестраивает меш жидкости под текущую ориентацию трубки.
 
     Меш записывается в мировых координатах, поэтому объект жидкости
@@ -484,13 +514,15 @@ def build_liquid(obj, tube, target_mm3, segments=REVOLVE_SEGMENTS,
     Returns
     -------
     dict с полями level_mm, volume_mm3, error_mm3, spilled, flat,
-    verts, faces.
+    verts, faces, liquid_type, liquid_config.
     """
+    props = _normalize_liquid_props(liquid_config)
     mw = tube.matrix_world.copy()
     level, _solver_vol, spilled = solve_level_for_volume(
-        mw, target_mm3, tol_mm3=0.02, segments=segments, fast=use_fast)
+        mw, target_mm3, tol_mm3=0.02, segments=segments, fast=use_fast,
+        liquid_props=props)
 
-    bm = _liquid_bmesh(mw, level, segments)
+    bm = _liquid_bmesh(mw, level, segments, liquid_props=props)
     if bm is None:
         vol = 0.0
     else:
@@ -503,7 +535,7 @@ def build_liquid(obj, tube, target_mm3, segments=REVOLVE_SEGMENTS,
             bm.free()
         level, _solver_vol, spilled = solve_level_for_volume(
             mw, target_mm3, tol_mm3=0.02, segments=segments,
-            fast=False, flat=True)
+            fast=False, flat=True, liquid_props=props)
         bm = _build_flat_bmesh(mw, level, segments)
         flat = True
         if bm is None:
@@ -520,6 +552,9 @@ def build_liquid(obj, tube, target_mm3, segments=REVOLVE_SEGMENTS,
     me.update()
     obj.matrix_world = Matrix.Identity(4)
 
+    liq_name = (liquid_config.get('name', 'water')
+                if isinstance(liquid_config, dict) else 'water')
+
     return {
         'level_mm': level,
         'volume_mm3': vol,
@@ -528,4 +563,6 @@ def build_liquid(obj, tube, target_mm3, segments=REVOLVE_SEGMENTS,
         'flat': flat,
         'verts': len(me.vertices),
         'faces': len(me.polygons),
+        'liquid_type': liq_name,
+        'liquid_config': liquid_config,
     }

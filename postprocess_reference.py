@@ -63,6 +63,8 @@ def _overlay_lines(meta):
     lines = []
     if overlay.get('volume') and meta.get('volume_mm3') is not None:
         lines.append(f"V = {meta['volume_mm3']:.0f} mm3")
+    if overlay.get('liquid') and meta.get('liquid_type'):
+        lines.append(f"Liq = {meta['liquid_type']}")
     if overlay.get('azimuth'):
         az = meta.get('azimuth_deg')
         lines.append("phi = -" if az is None else f"phi = {az:.0f} deg")
@@ -82,7 +84,7 @@ def _draw_overlay(image, meta):
     overlay = meta.get('overlay') or {}
     if not any(overlay.get(k) for k in
                ('volume', 'azimuth', 'tilt_deg', 'ellipse_center',
-                'center_marker')):
+                'center_marker', 'liquid')):
         return image
 
     out = image.convert('RGBA')

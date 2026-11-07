@@ -21,6 +21,9 @@ $BL --background --python render_reference.py
 # Числовая самопроверка жидкости
 $BL --background --python check_liquid.py
 
+# Проверка физики пресетов жидкостей
+$BL --background --python check_liquid_presets.py
+
 # Проверки постобработки (системный python3, без Blender)
 python3 check_postprocess.py
 
@@ -168,11 +171,24 @@ $BL --background --python injector3d/create_scene.py -- 4.5 --tilt-count 8 --til
   проверяет пересчёт и overlay. Композиторный путь без overlay отложен:
   async-worker скрывает Python за рендером следующего кадра.
 
-## Пункт 6 — CLI и параллельный рендер — ЧАСТИЧНО РЕАЛИЗОВАН
+## Пункт 6 — CLI, пресеты жидкостей, камера, GLB и параллельный рендер — ОСНОВНОЕ РЕАЛИЗОВАНО
 
 - `create_scene.py` принимает `--fill-fraction` или взаимоисключающий
   `--volume-mm3` (абсолютный объём, проверяется по `capacity_mm3()`),
+  `--liquid-type` (`water`, `glycerol`, `ethanol`, `mineral_oil`) с
+  переопределениями физики (`--liquid-ior`, `--liquid-density`,
+  `--surface-tension`, `--contact-angle`, `--absorption-density`),
+  `--camera-preset` (`reference`, `studio`) и параметры камеры
+  (`--camera-distance`, `--camera-z`, `--camera-target-z`, `--camera-lens`,
+  `--camera-roll`, `--camera-distortion`), `--export-glb [PATH]`,
   `--gpu-index`, `--shard-index/--shard-count`, `--timestamp`, `--tag`.
+- Мениск Юнга-Лапласа и Cycles-материалы полностью параметризованы;
+  `check_liquid_presets.py` подтверждает физическую точность (расхождение
+  численного и аналитического ΔV ≤ 0.0013 мм³).
+- `export_scene_glb()` экспортирует геометрию трубки и жидкости с
+  PBR-материалами в формат GLB (glTF 2.0).
+- `render.py` генерирует имена с `_liq-<type>` для альтернативных жидкостей,
+  записывает `liquid_type`, `liquid_ior`, `camera_distortion` в JSON manifest.
 - `render_parallel.py` (системный `python3`) делит N наклонных кадров
   между GPU, запускает по процессу Blender на GPU и сливает manifest
   шардов; вертикаль рендерит только шард 0. Логи —
@@ -183,9 +199,8 @@ $BL --background --python injector3d/create_scene.py -- 4.5 --tilt-count 8 --til
   запусков, не основной рычаг скорости. См. `reports/performance.md` §9.5.
 - `scene.setup_scene(gpu_index=...)` оставляет одно CUDA-устройство;
   без индекса включает все, без CUDA — CPU-fallback.
-- Пока не сделаны `.glb`-экспорт, выбор типа жидкости, произвольный угол
-  камеры и пакетный рендер разных наборов параметров. План и замеры —
-  `reports/step6_cli.md`.
+- В очереди остаётся пакетный рендер матриц параметров датасетов одним запуском.
+  План и замеры — `reports/step6_cli.md`.
 
 ## Стадии и артефакты
 

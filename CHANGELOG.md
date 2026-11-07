@@ -2,6 +2,32 @@
 
 ## [Не выпущено]
 
+### Добавлено — пресеты жидкостей, камера и GLB-экспорт (пункт 6)
+- `config.LIQUID_PRESETS`: добавлены физические и оптические пресеты
+  для `water`, `glycerol`, `ethanol`, `mineral_oil`. Функция
+  `get_liquid_config()` поддерживает переопределение параметров через CLI.
+- `meniscus.py` и `liquid.py`: солвер Юнга-Лапласа и построение меша
+  параметризованы под поверхностное натяжение $\sigma$, плотность $\rho$
+  и краевой угол $\theta_c$. Исправлена обработка опрокидывания ветви ОДУ
+  при малых углах смачивания (этанол $\theta_c=5^\circ$).
+- `check_liquid_presets.py`: числовая самопроверка всех 4 жидкостей
+  подтверждает аналитический объём мениска (ошибка $\le 0.0013$ мм³) и
+  инвариантность $V(\theta) = \text{const}$ под наклоном.
+- `materials.py`: `create_material_liquid()` настраивает IOR, Base Color
+  и Volume Absorption (цвет и плотность) из конфигурации жидкости.
+- `config.CAMERA_PRESETS`: пресеты `reference` (OV5693 1.3 мм, дисторсия 0.66)
+  и `studio` (85 мм, без дисторсии). `scene.setup_scene()` принимает
+  конфигурацию камеры; проекция 2D-центра адаптируется под дисторсию.
+- `render.export_scene_glb()`: экспорт 3D-сцены трубки и жидкости в
+  формат GLB (glTF 2.0).
+- CLI `create_scene.py`: аргументы `--liquid-type`, физические переопределения
+  `--liquid-ior`, `--liquid-density`, `--surface-tension`, `--contact-angle`,
+  `--absorption-density`, пресеты камеры `--camera-preset`, параметры
+  `--camera-distance`, `--camera-z`, `--camera-target-z`, `--camera-lens`,
+  `--camera-roll`, `--camera-distortion`, `--export-glb` и `--overlay-liquid`.
+- Имена PNG получают суффикс `_liq-<type>` для альтернативных жидкостей;
+  manifest серии сохраняет `liquid_type`, `liquid_ior` и свойства камеры.
+
 ### Исправлено — малый объём при большом наклоне (пункт 6)
 - У дна между плоским fallback и полным мениском есть разрыв объёма:
   например, при 50° и цели 2000 мм³ бисекция возвращала меш на 2237 мм³,

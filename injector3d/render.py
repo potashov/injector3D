@@ -49,7 +49,19 @@ def _configure_compositor(scene, distortion=None, fit=False):
     `NodeGroupOutput`. Для 4.3 сохранена ветка со старым API.
     """
     if distortion is None:
-        distortion = SCENE_CAMERA['distortion']
+        cam = scene.camera
+        if cam and 'config' in cam and 'distortion' in cam['config']:
+            distortion = float(cam['config']['distortion'])
+        else:
+            distortion = SCENE_CAMERA['distortion']
+
+    if abs(distortion) < 1e-6:
+        if hasattr(scene, 'compositing_node_group'):
+            scene.compositing_node_group = None
+            scene.render.use_compositing = False
+        else:
+            scene.use_nodes = False
+        return
 
     if hasattr(scene, 'compositing_node_group'):
         tree = bpy.data.node_groups.new(
@@ -265,10 +277,12 @@ def _volume_tag(volume_mm3):
     return f'_v{int(round(float(volume_mm3)))}'
 
 
-def _render_filename(step, variant_name, ts, volume_mm3, tag=None):
+def _render_filename(step, variant_name, ts, volume_mm3, tag=None, liquid_type=None):
     parts = [step, variant_name]
     if tag:
         parts.append(tag)
+    if liquid_type and liquid_type != 'water':
+        parts.append(f'liq-{liquid_type}')
     stem = '_'.join(parts) + _volume_tag(volume_mm3)
     return f'{stem}_{ts}.png'
 
@@ -286,6 +300,8 @@ def _lensdistort_raw_px(x_px, y_px, width, height, distortion):
     и сверена с рендером калибровочной сетки: расхождение центроидов
     ≤ 1.2 px. `x_px`/`y_px` — координаты с началом в левом верхнем углу.
     """
+    if abs(distortion) < 1e-6:
+        return x_px, y_px
     cx, cy = width / 2.0, height / 2.0
     qx = (x_px - cx) / width
     qy = (y_px - cy) / height
@@ -307,16 +323,30 @@ def _project_center_raw(center_mm, scene):
     height = scene.render.resolution_y
     x_pre = co.x * width
     y_pre = (1.0 - co.y) * height
+    distortion = SCENE_CAMERA['distortion']
+    if 'config' in cam and 'distortion' in cam['config']:
+        distortion = float(cam['config']['distortion'])
     return _lensdistort_raw_px(
-        x_pre, y_pre, width, height, SCENE_CAMERA['distortion'])
+        x_pre, y_pre, width, height, distortion)
 
 
-def _frame_metadata(volume_mm3, azimuth_deg, tilt_deg, center_mm, scene):
+def _frame_metadata(volume_mm3, azimuth_deg, tilt_deg, center_mm, scene,
+                    liquid_type=None, liquid_config=None):
     meta = {
         'volume_mm3': volume_mm3,
         'azimuth_deg': azimuth_deg,
         'tilt_deg': tilt_deg,
     }
+    if liquid_type:
+        meta['liquid_type'] = liquid_type
+    if liquid_config and 'ior' in liquid_config:
+        meta['liquid_ior'] = liquid_config['ior']
+    cam = scene.camera
+    if cam and 'config' in cam:
+        c = cam['config']
+        if 'name' in c:
+            meta['camera_preset'] = c['name']
+        meta['camera_distortion'] = c.get('distortion', 0.0)
     if center_mm is not None:
         meta['ellipse_center_3d_mm'] = list(center_mm)
         meta['ellipse_center_2d_raw_px'] = list(
@@ -328,7 +358,56 @@ def _center_for_info(tube, info):
     if not info or info.get('level_mm') is None:
         return None
     return contact_center_mm(tube.matrix_world, info['level_mm'],
-                             flat=info.get('flat', False))
+                             flat=info.get('flat', False),
+                             liquid_props=info.get('liquid_config'))
+
+
+def export_scene_glb(filepath, objects=None):
+    """Экспорт выбранных объектов сцены в GLB (glTF 2.0 Binary).
+
+    По умолчанию экспортирует объекты трубки и меши жидкости.
+    """
+    os.makedirs(os.path.dirname(os.path.abspath(filepath)), exist_ok=True)
+    prev_active = bpy.context.view_layer.objects.active
+    prev_selected = [o for o in bpy.context.selected_objects]
+
+    try:
+        bpy.ops.object.select_all(action='DESELECT')
+        export_objs = []
+        if objects:
+            for obj in objects:
+                if obj and obj.name in bpy.data.objects:
+                    export_objs.append(bpy.data.objects[obj.name])
+        else:
+            for obj in bpy.data.objects:
+                if obj.type == 'MESH' and ('Tube' in obj.name or 'Liquid' in obj.name):
+                    export_objs.append(obj)
+
+        for obj in export_objs:
+            obj.select_set(True)
+            obj.hide_viewport = False
+
+        if export_objs:
+            bpy.context.view_layer.objects.active = export_objs[0]
+
+        bpy.ops.export_scene.gltf(
+            filepath=filepath,
+            export_format='GLB',
+            use_selection=bool(export_objs),
+            export_cameras=False,
+            export_lights=False,
+            export_apply=True,
+            export_materials='EXPORT',
+        )
+        size_kb = os.path.getsize(filepath) // 1024
+        print(f"  Экспорт GLB: {os.path.basename(filepath)} ({size_kb} КБ)")
+    finally:
+        bpy.ops.object.select_all(action='DESELECT')
+        for o in prev_selected:
+            if o.name in bpy.data.objects:
+                o.select_set(True)
+        if prev_active and prev_active.name in bpy.data.objects:
+            bpy.context.view_layer.objects.active = prev_active
 
 
 def render_tube(tube, camera, step='1', on_tilt=None,
@@ -372,13 +451,15 @@ def render_tube(tube, camera, step='1', on_tilt=None,
             info = (on_tilt(variant_name, tilt_euler)
                     if on_tilt is not None else None)
 
+            liq_type = info.get('liquid_type') if info else None
+            liq_cfg = info.get('liquid_config') if info else None
             volume = info.get('volume_mm3') if info else None
             center = _center_for_info(tube, info)
             meta = _frame_metadata(
                 volume, None, _tilt_deg_from_matrix(tube.matrix_world),
-                center, scene)
+                center, scene, liquid_type=liq_type, liquid_config=liq_cfg)
             render_fname = _render_filename(
-                step, variant_name, ts, volume, tag)
+                step, variant_name, ts, volume, tag, liquid_type=liq_type)
             final_path = os.path.join(base, render_fname)
 
             # Сохраняем .blend (историческое поведение render_tube)
@@ -501,12 +582,14 @@ def render_ring(tube, liquid_upright, liquid_tilted,
                 tilt_deg = angle
             bpy.context.view_layer.update()
 
+            liq_type = info.get('liquid_type') if info else None
+            liq_cfg = info.get('liquid_config') if info else None
             volume = info.get('volume_mm3') if info else None
             center = _center_for_info(tube, info)
             meta = _frame_metadata(volume, azimuth_deg, tilt_deg, center,
-                                   scene)
+                                   scene, liquid_type=liq_type, liquid_config=liq_cfg)
             render_fname = _render_filename(
-                step, variant_name, ts, volume, tag)
+                step, variant_name, ts, volume, tag, liquid_type=liq_type)
             final_path = os.path.join(base, render_fname)
             job = _render_one(
                 scene, final_path, variant_name, meta, postprocess, overlay)

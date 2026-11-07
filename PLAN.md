@@ -116,16 +116,21 @@
   без overlay отложен как нецелесообразный. План, формула Lensdist и
   статус — `reports/step5_postprocessing.md`
 
-### 🔄 6. CLI-обвязка — ЧАСТИЧНО РЕАЛИЗОВАНА
-- ✅ Параметры: `--fill-fraction` или `--volume-mm3`, `--tilt-count`,
-  `--tilt-angle`, `--gpu-index`, `--shard-index/--shard-count`,
-  `--timestamp`, `--tag`.
+### 🔄 6. CLI-обвязка — ОСНОВНОЕ РЕАЛИЗОВАНО
+- ✅ Параметры объёма: `--fill-fraction` или `--volume-mm3`.
+- ✅ Пресеты жидкостей: `--liquid-type [water|glycerol|ethanol|mineral_oil]`
+  и тонкие настройки (`--liquid-ior`, `--liquid-density`, `--surface-tension`,
+  `--contact-angle`, `--absorption-density`).
+- ✅ Пресеты камеры: `--camera-preset [reference|studio]` и тонкие настройки
+  ракурса (`--camera-distance`, `--camera-z`, `--camera-target-z`,
+  `--camera-lens`, `--camera-roll`, `--camera-distortion`).
+- ✅ Экспорт в `.glb`: `--export-glb [PATH]` сохраняет меши трубки и жидкости.
+- ✅ Серия наклонов и шардирование: `--tilt-count`, `--tilt-angle`,
+  `--gpu-index`, `--shard-index/--shard-count`, `--timestamp`, `--tag`.
 - ✅ Параллельный рендер одной серии по GPU:
   `render_parallel.py` делит азимуты, запускает Blender на каждый GPU
   и сливает manifest.
-- ⏳ Тип жидкости, произвольный угол камеры.
-- ⏳ Пакетный рендер разных наборов параметров одним запуском.
-- ⏳ Экспорт `.glb`; `.blend` и `.png` уже пишутся.
+- ⏳ Пакетный рендер матриц параметров (batch runner) одним запуском.
 - План и проверки — `reports/step6_cli.md`.
 
 ### 7. Тестовые рендеры
