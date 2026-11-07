@@ -12,8 +12,9 @@ Headless-Blender проект: генерирует 3D-сцену трубки �
 # Локальная сборка Blender 5.2.3 LTS (папка в .gitignore)
 BL=./blender-5.2.3-linux-x64/blender
 
-# Рендер пункта плана (номер -> output/<N>/ и префикс файлов)
-$BL --background --python injector3d/create_scene.py -- 4
+# Рендер серии N+1 (пункт 4.5)
+$BL --background --python injector3d/create_scene.py -- 4.5 \
+    --tilt-count 8 --tilt-angle 10
 
 # Кадр под референс 06120 (1200×1200, белый фон, сдвиг вправо 105 px)
 $BL --background --python render_reference.py
@@ -78,9 +79,9 @@ $BL --background --python gpu_info.py
   `attach_camera_to_tube()` жёстко родит камеру к трубке — вызывается для
   обоих режимов рендера; свет всегда остаётся в мировых координатах.
 - `injector3d/render.py` — два режима, оба с привязанной камерой:
-  - `render_tube()` по фиксированным `config.TILT_VARIANTS` (5 ракурсов,
-    исторические `output/1–4/`): наклон вокруг дна, Эйлеровы углы.
-  - `render_ring()` — N+1 кадров (п. 4.5, `output/4.5/`): наклон на θ в
+  - `render_tube()` по фиксированным `config.TILT_VARIANTS` (5 ракурсов):
+    наклон вокруг дна, Эйлеровы углы.
+  - `render_ring()` — N+1 кадров (п. 4.5): наклон на θ в
     плоскости азимута φ через точку опоры `TILT_PIVOT_Z_MM`
     (`tilt_matrix(θ, φ) = Rz(φ)·Ry(θ)·Rz(φ)⁻¹`). Камера в цикле не
     трогается — меняется единственный `tube.matrix_world`, и Blender
@@ -91,7 +92,12 @@ $BL --background --python gpu_info.py
     `Rz(φ)·Ry(θ)` — там φ сокращался, и все кадры были идентичны.
   Рендер 1200×1200 в RGBA с `film_transparent=True`, Lensdist
   `use_fit=False`, затем опциональная постобработка; имена
-  `<step>_<ракурс>[_<tag>]_v<объём>_<timestamp>.png|.blend`.
+  `<жидкость>_<ракурс>[_<tag>][_v<объём>]_<timestamp>.png|.blend`.
+
+> [!IMPORTANT]
+> **Принято к реализации (не в коде):** `<жидкость>` вместо `<step>`,
+> вывод — в `output/<YYYYMMDD_HHMM>/`, timestamp из конца имени уходит,
+> номера шага нет ни в путях, ни в именах файлов, ни в логах.
 - `render_reference.py` — отдельный кадр под `06120.png`:
   `config.REFERENCE_CAMERA`, дополнительно сдвиг +105 px и высота 1124 px.
 - `postprocess_reference.py` — системный `python3` (PIL/numpy): по
@@ -207,8 +213,8 @@ $BL --background --python injector3d/create_scene.py -- 4.5 --tilt-count 8 --til
 - Номер пункта после `--` управляет не только именами, но и составом сцены:
   жидкость с пункта 2, материалы с пункта 4. Без номера используется `1`.
 - `output/<N>/*.png` **отслеживаются git** как результат работы;
-  `.blend`/`.blend1` игнорируются. Не удаляйте чужие рендеры и не считайте
-  `output/` временным каталогом.
+  `.blend`/`.blend1`/`.log` игнорируются. Не удаляйте чужие рендеры и не
+  считайте `output/` временным каталогом.
 - `output/06120/` — отдельный результат под референс; основной
   `create_scene.py` его не перезаписывает.
 - `output/1–3/` — исторические серии студийной камеры 85 мм; текущая
