@@ -120,7 +120,7 @@
   без overlay отложен как нецелесообразный. План, формула Lensdist и
   статус — `reports/step5_postprocessing.md`
 
-### 🔄 6. CLI-обвязка — ОСНОВНОЕ РЕАЛИЗОВАНО
+### ✅ 6. CLI-обвязка — РЕАЛИЗОВАНО
 - ✅ Параметры объёма: `--fill-fraction` или `--volume-mm3`.
 - ✅ Пресеты жидкостей: `--liquid-type [water|glycerol|ethanol|mineral_oil]`
   и тонкие настройки (`--liquid-ior`, `--liquid-density`, `--surface-tension`,
@@ -134,7 +134,10 @@
 - ✅ Параллельный рендер одной серии по GPU:
   `render_parallel.py` делит азимуты, запускает Blender на каждый GPU
   и сливает manifest.
-- ⏳ Пакетный рендер матриц параметров (batch runner) одним запуском.
+- ✅ Пакетный рендер матриц параметров (`render_batch.py`):
+  объём/доля × угол × жидкость × камера, отдельный каталог на серию,
+  `batch_manifest.json`, `--config`/диапазоны, `--resume`, `--limit`,
+  `--keep-going`, `--dry-run`; проверки — `check_batch.py`.
 - План и проверки — `reports/step6_cli.md`.
 
 ### 7. Тестовые рендеры

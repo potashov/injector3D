@@ -71,6 +71,11 @@ python3 check_postprocess.py
 # Параллельный рендер серии по GPU (системный python3)
 python3 render_parallel.py --tilt-count 8 --tilt-angle 10 --gpus 0,1
 
+# Пакетный рендер матрицы параметров (системный python3)
+python3 render_batch.py --liquids water,glycerol \
+    --volumes 2000,5000 --tilt-angles 10,20 --gpus 0,1
+python3 check_batch.py
+
 # Диагностика CUDA / GPU
 $BL --background --python check_cuda.py
 $BL --background --python check_build_cuda.py
@@ -89,8 +94,8 @@ $BL --background --python gpu_info.py
 ### Проверка
 
 Тестового фреймворка, линтера и typecheck нет. Проверка = успешные прогоны
-`check_liquid.py`, `check_liquid_presets.py` и `check_postprocess.py`
-(assert'ы + код возврата) и рендер без исключений.
+`check_liquid.py`, `check_liquid_presets.py`, `check_postprocess.py` и
+`check_batch.py` (assert'ы + код возврата) и рендер без исключений.
 
 ---
 
@@ -112,6 +117,8 @@ injector3d/
 render_reference.py      # Одиночный кадр под 06120.png
 postprocess_reference.py # Опциональная заливка, масштаб/сдвиг, подписи
 render_parallel.py       # Параллельный рендер по GPU + merge manifest
+render_batch.py          # Пакетный рендер матриц параметров
+check_batch.py           # Проверки batch runner без Blender
 check_liquid.py          # Числовая самопроверка объёма и уровня
 check_postprocess.py     # Проверки постобработки без Blender
 check_cuda.py            # Диагностика доступности CUDA
@@ -202,6 +209,9 @@ gpu_info.py              # Список устройств рендера и п�
 | `output/<YYYYMMDD_HHMM>/*.blend` | master-сцены прогона (игнорируются git) |
 | `output/<YYYYMMDD_HHMM>/*.json` | manifest серии (игнорируется git) |
 | `output/<YYYYMMDD_HHMM>/*.log` | логи шардов `render_parallel.py` (игнорируются git) |
+| `output/<batch>/<series>/*.png` | Кадры пакетного прогона (отслеживаются git) |
+| `output/<batch>/batch_manifest.json` | Сводка серий и статусов (игнорируется git) |
+| `output/<batch>/logs/*.log` | Логи серий пакета (игнорируются git) |
 | `output/1/` … `output/4.5/` | Исторические прогоны старой схемы `output/<пункт>/` |
 | `output/06120/` | Кадр под референс 06120 |
 | `reports/step*.md` | Отчёты по пунктам плана |
@@ -231,11 +241,14 @@ gpu_info.py              # Список устройств рендера и п�
 - **Пункт 4** — материалы (PMMA + вода с поглощением)
 - **Пункт 4.5** — серия N+1 (наклон по азимуту вокруг точки опоры), кэш мениска, master `.blend`, отчёт `reports/step4.5.md`
 - **Референс 06120** — камера/дисторсия, отчёт, контрольный кадр
+- **Пункт 6** — CLI-обвязка: пресеты жидкостей/камеры, GLB, шарды,
+  `render_batch.py` и `check_batch.py`
+- **Пункт 10** — clipped-мениск «стенка + дно», интегрирован в
+  `build_liquid()`; отчёт `reports/meniscus_mixed_prototype.md`
 
 ### ⏳ В процессе / отложено
 
 - **Пункт 5** — детальная проработка кадров (каустики, блики, HDRI)
-- **Пункт 6** — CLI-обвязка (параметрический запуск, пакетный рендер)
 - **Пункт 7** — финальные тестовые рендеры
 - **Пункт 8** — капли на внутренней стенке (заготовлены параметры)
 

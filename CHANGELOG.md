@@ -2,6 +2,29 @@
 
 ## [Не выпущено]
 
+### Добавлено — пакетный рендер матриц параметров (пункт 6)
+- `render_batch.py` (системный `python3`): матрица
+  объём/доля × угол × жидкость × камера, запуск серий через
+  `render_parallel.py`. Каждая серия получает собственный каталог
+  `<output-dir>/<batch>/<series>/`, поэтому master/manifest разных
+  объёмов не конфликтуют; сводка — `<batch>/batch_manifest.json`,
+  логи — `<batch>/logs/`.
+- Поддержаны JSON-конфиг, диапазоны через CLI (`--liquids`, `--volumes`,
+  `--fill-fractions`, `--tilt-angles`, `--tilt-counts`, `--cameras`),
+  `--limit`, `--resume`, `--keep-going`, `--keep-shards`, `--dry-run`,
+  `--gpus`, `--shards`, `--blender`, `--tag`, `--extra-args`.
+- `render_batch.py` проверяет неизвестные жидкости/камеры, дубликаты
+  серий и взаимоисключающие объём/долю; для `--mode tube` принудительно
+  ставит один шард.
+- `check_batch.py`: проверки матрицы, имён серий, команд, лимита, resume,
+  атомарной записи `batch_manifest.json` и CLI `--dry-run` без Blender.
+- `output_manager.batch_manifest_filename()` — единое имя сводки пакета.
+- Smoke-прогон пакета (ring, N=1, 2000 мм³, `--no-postprocess`):
+  2 кадра, manifest серии и `batch_manifest.json`; повтор с `--resume`
+  пропускает готовую серию.
+- Документация: `AGENTS.md`, `PLAN.md`, `README.md`, `KODA.md`,
+  `reports/step6_cli.md`, `reports/plan_status_and_next_steps.md`.
+
 ### Добавлено — смешанный мениск «стенка + дно» (пункт 10)
 - `injector3d/meniscus_mixed.py`: clipped-солвер обрезает
   осесимметричный мениск дном, считает объём по точным интервалам

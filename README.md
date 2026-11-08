@@ -100,6 +100,11 @@ $BL --background --python injector3d/create_scene.py -- \
 
 # То же, но двумя процессами Blender по одному GPU на каждый
 python3 render_parallel.py --tilt-count 8 --tilt-angle 10 --gpus 0,1
+
+# Пакетная матрица: жидкости × объёмы × углы, по одной серии на набор
+python3 render_batch.py --liquids water,glycerol \
+    --volumes 2000,5000 --tilt-angles 10,20 --gpus 0,1
+# → output/<batch>/<series>/ + batch_manifest.json
 ```
 
 Плоскости наклона: старт с `TILT_AZIMUTH_START_DEG = 270°`, шаг `-360°/N`.
@@ -134,6 +139,8 @@ injector3d/
 render_reference.py   # Рендер кадра под референс 06120
 postprocess_reference.py  # Заливка (опц.), масштаб/сдвиг, подписи
 render_parallel.py    # Параллельный рендер серии по GPU + merge manifest
+render_batch.py       # Пакетный рендер матриц параметров
+check_batch.py        # Проверки batch runner без Blender
 check_liquid.py       # Числовая самопроверка объёма и уровня
 check_liquid_presets.py   # Самопроверка физики пресетов жидкостей
 check_postprocess.py  # Проверки постобработки без Blender
@@ -141,6 +148,7 @@ calib_world.py        # Подбор WORLD_STRENGTH по сетке прогон
 check_cuda.py         # Диагностика доступности CUDA в сборке Blender
 gpu_info.py           # Список устройств рендера и их параметров
 output/<YYYYMMDD_HHMM>/ # Прогон: PNG, master .blend, manifest, GLB
+output/<batch>/<series>/ # Пакетный прогон + batch_manifest.json в корне
 output/1/ … output/4.5/ # Исторические прогоны старой схемы (в git)
 output/06120/         # Кадры под референс 06120
 reports/              # Отчёты по пунктам плана
@@ -211,8 +219,9 @@ $BL --background --python injector3d/create_scene.py -- \
 ```bash
 blender --background --python check_liquid.py
 
-# Проверки постобработки (системный python3)
+# Проверки постобработки и batch runner (системный python3)
 python3 check_postprocess.py
+python3 check_batch.py
 ```
 
 ## Состояние
@@ -238,10 +247,11 @@ python3 check_postprocess.py
   «воздух/жидкость» вырос на 67 %, яркость тела жидкости 145 против 137
   на реальном фото
 - ⏳ Пункт 5 — детальная проработка кадров (каустики, блики, HDRI)
-- 🔄 Пункт 6 — CLI: `--fill-fraction`/`--volume-mm3`, `--liquid-type` +
+- ✅ Пункт 6 — CLI: `--fill-fraction`/`--volume-mm3`, `--liquid-type` +
   переопределения физики, `--camera-preset` + параметры ракурса,
-  `--export-glb`, `--gpu-index`, шарды и `render_parallel.py`; остался
-  пакетный рендер матриц параметров (batch runner) — `reports/step6_cli.md`
+  `--export-glb`, `--gpu-index`, шарды, `render_parallel.py` и пакетный
+  `render_batch.py`; проверки — `check_batch.py`,
+  `reports/step6_cli.md`
 - ⏳ Пункт 7 — финальные тестовые рендеры
 - ⏳ Пункт 8 — капли на внутренней стенке трубки
 - ⏳ Пункт 9 — пузырьки в жидкости в районе мениска

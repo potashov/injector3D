@@ -1,14 +1,14 @@
 # Пункт 6: CLI-обвязка, пресеты жидкостей, камера, GLB и параллельный рендер
 
-**Дата:** 7 ноября 2026
-**Статус:** основные возможности CLI реализованы. Есть режимы
-`--mode ring|tube`, `--output-dir` с каталогом прогона по timestamp,
-параметры объёма, выбор типа жидкости (`water`, `glycerol`, `ethanol`,
-`mineral_oil`) и их физических свойств, пресеты и параметры камеры
-(`reference`, `studio`), экспорт в `.glb`, шардирование серии, выбор GPU и
-launcher, который запускает несколько Blender-процессов и сливает manifest.
-Номер пункта плана из путей, имён файлов и стадий сцены убран.
-В очереди остаётся пакетный генератор датасетов по матрице параметров.
+**Дата:** 7 ноября 2026 (batch runner — 8 ноября 2026)
+**Статус:** пункт 6 реализован. Есть режимы `--mode ring|tube`,
+`--output-dir` с каталогом прогона по timestamp, параметры объёма, выбор
+типа жидкости (`water`, `glycerol`, `ethanol`, `mineral_oil`) и их
+физических свойств, пресеты и параметры камеры (`reference`, `studio`),
+экспорт в `.glb`, шардирование серии, выбор GPU, launcher, который
+запускает несколько Blender-процессов и сливает manifest, и пакетный
+`render_batch.py` для матриц параметров. Номер пункта плана из путей,
+имён файлов и стадий сцены убран.
 
 ## 1. CLI `create_scene.py`
 
@@ -98,7 +98,53 @@ python3 render_parallel.py --tilt-count 8 --tilt-angle 10 \
 делят GPU по кругу. Имена master `.blend` содержат суффикс
 `_s<k>of<M>`, финальные PNG — нет, поэтому конфликтов нет.
 
-## 3. Manifest и финальный центр
+## 3. Пакетный рендер матриц
+
+`render_batch.py` — системный `python3`, запускает несколько серий через
+`render_parallel.py`:
+
+```bash
+python3 render_batch.py --liquids water,glycerol \
+    --volumes 2000,5000 --tilt-angles 10,20 --gpus 0,1
+
+python3 render_batch.py --config batch.json \
+    --output-dir /mnt/datasets/injector --gpus 0,1
+```
+
+Конфиг — JSON-объект:
+
+```json
+{
+  "mode": "ring",
+  "liquids": ["water", "glycerol"],
+  "volumes_mm3": [2000, 5000],
+  "tilt_angles": [10, 20],
+  "tilt_counts": [8],
+  "camera_presets": ["reference"],
+  "tag": "dataset",
+  "extra_args": ["--no-postprocess"]
+}
+```
+
+Ключи `volumes_mm3` и `fill_fractions` взаимоисключающие; если не задан
+ни один, берётся `config.FILL_FRACTION`. Матрица разворачивается в серии
+`<жидкость>_v<объём>_a<угол>_n<N>_c_<камера>` (или
+`<жидкость>_f<доля>_tube_c_<камера>` для `--mode tube`). Каждая серия
+лежит в `<output-dir>/<batch>/<series>/`: master, manifest, PNG и
+shard-логи не конфликтуют между объёмами. В корне пакета пишутся
+`batch_manifest.json` (матрица, команды, статусы, пути) и `logs/`.
+
+Флаги: `--limit` (первые серии), `--resume` (пропустить серии с готовым
+manifest нужной длины), `--keep-going` (продолжать после ошибки),
+`--keep-shards`, `--dry-run` (только команды). `--mode tube` принудительно
+использует один шард. `check_batch.py` проверяет матрицу, имена серий,
+команды, лимит, resume, `batch_manifest.json` и dry-run без Blender.
+
+Smoke-прогон (ring, N=1, 2000 мм³, `--no-postprocess`): 2 кадра,
+manifest серии и `batch_manifest.json`; повтор с `--resume` пропускает
+готовую серию.
+
+## 4. Manifest и финальный центр
 
 После п. 5 worker возвращает не только готовый PNG, но и итоговый
 `ellipse_center_2d_px`; он попадает в manifest рядом с raw-центром.
@@ -106,11 +152,14 @@ python3 render_parallel.py --tilt-count 8 --tilt-angle 10 \
 повторного чтения PNG. В manifest также есть `shards` — число шардов,
 которыми собрана серия.
 
-## 4. Проверки
+## 5. Проверки
 
 - `check_postprocess.py` (системный `python3`): alpha bbox, пересчёт
   raw-центра в финальный, RGBA/shift, fill/height, маркер, batch
   namespace и result JSON. Все проверки проходят.
+- `check_batch.py` (системный `python3`): матрица, имена серий, команды,
+  `--limit`, resume по manifest, атомарная запись `batch_manifest.json`,
+  CLI `--dry-run` без создания каталога. Все проверки проходят.
 - `--gpu-index 0` и `--gpu-index 1` в headless включают
   `Quadro P1000` с индексами `[0]` и `[1]` соответственно.
 - Два шарда, N=2, θ=10°: 3 кадра, в объединённом manifest
@@ -134,7 +183,7 @@ python3 render_parallel.py --tilt-count 8 --tilt-angle 10 \
   не выполняется — manifest сразу финальный; `--mode tube` с
   `--shards > 1` отклоняется.
 
-## 5. Замер ускорения
+## 6. Замер ускорения
 
 1200×1200, 128 сэмплов, θ=10°, два шарда по одному GPU:
 
@@ -149,9 +198,9 @@ python3 render_parallel.py --tilt-count 8 --tilt-angle 10 \
 процессами почти не помогает. Launcher оставлен для изоляции шардов и
 пакетных запусков, а не как основной рычаг скорости.
 
-## 6. Что осталось
+## 7. Что осталось
 
-- Пакетный рендер нескольких наборов параметров (объём × угол × жидкость × камера)
-  одним запуском (batch runner матриц датасетов); сейчас launcher параллелит одну серию.
-- Пункты 8 и 9 плана: капли на внутренних стенках трубки и пузырьки воздуха у мениска.
-- Пункт 10 плана: солвер смешанного контакта при сверхмалых объёмах у дна.
+- Пункты 8 и 9 плана: капли на внутренних стенках трубки и пузырьки
+  воздуха у мениска.
+- Пункт 10 реализован и интегрирован в `build_liquid()`; см.
+  `reports/meniscus_mixed_prototype.md`.

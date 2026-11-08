@@ -7,6 +7,7 @@ timestamp больше не попадает в имена файлов, а но
 
 Каталог:
     <база>/<YYYYMMDD_HHMM>/, где база — --output-dir или config.OUTPUT_DIR
+    <база>/<batch>/<series>/ — пакетный прогон render_batch.py
 
 Имена:
     <жидкость>_<ракурс>[_<tag>][_v<объём>].png        — кадры
@@ -15,6 +16,7 @@ timestamp больше не попадает в имена файлов, а но
     <жидкость>_manifest[_<tag>][_s<k>of<M>].json      — manifest серии
     <жидкость>_shard<k>.log                           — лог шарда
     <жидкость>[_<tag>].glb                            — экспорт GLB
+    batch_manifest.json                               — сводка пакета
 """
 
 import os
@@ -68,6 +70,11 @@ def manifest_filename(liquid_type, tag=None, shard_suffix=''):
 def shard_log_filename(liquid_type, shard_index):
     """Имя лога шарда для `render_parallel.py`."""
     return f'{_stem(liquid_type)}_shard{shard_index}.log'
+
+
+def batch_manifest_filename():
+    """Имя сводного manifest пакетного рендера."""
+    return 'batch_manifest.json'
 
 
 def glb_filename(liquid_type, tag=None):

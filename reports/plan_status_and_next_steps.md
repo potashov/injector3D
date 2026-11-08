@@ -6,6 +6,10 @@
 
 Сгенерированные изображения служат синтетическим обучающим датасетом для компьютерного зрения (определение уровня и мениска жидкости, оценка 2D/3D координат центра эллипса контакта, границ раздела фаз).
 
+> **Обновление 2026-11-08:** batch runner реализован (`render_batch.py`,
+> `check_batch.py`), пункт 6 закрыт. Пункт 10 (смешанный мениск) также
+> завершён и интегрирован в `build_liquid()`.
+
 ---
 
 ## Текущее состояние этапов (Аудит)
@@ -19,7 +23,7 @@
 | **4.5. Серия $N+1$ и оптимизация** | Серия наклонов вокруг середины трубки ($R_z(\phi) R_y(\theta) R_z(-\phi)$), привязка камеры к трубке, шаблон мениска с $\Delta V_{under}$, 2 постройки меша на серию | ✅ **Завершён** | [`reports/step4.5.md`](file:///home/nikolay/opencv/injector3D/reports/step4.5.md), [`reports/performance.md`](file:///home/nikolay/opencv/injector3D/reports/performance.md) |
 | **Референс 06120** | Камера OV5693 1.3 мм, barrel-дисторсия 0.66, roll +1.5°, центрирование 105 px | ✅ **Завершён** | [`render_reference.py`](file:///home/nikolay/opencv/injector3D/render_reference.py), [`reports/reference_camera_06120.md`](file:///home/nikolay/opencv/injector3D/reports/reference_camera_06120.md) |
 | **5. Постобработка и оверлеи** | Фоновый worker (`postprocess_reference.py`), Lensdist-проекция 2D центра эллипса, маркер, текстовые оверлеи, manifest серии | ✅ **Завершён (основное)** | [`check_postprocess.py`](file:///home/nikolay/opencv/injector3D/check_postprocess.py), [`reports/step5_postprocessing.md`](file:///home/nikolay/opencv/injector3D/reports/step5_postprocessing.md) |
-| **6. CLI и параллелизация** | `--volume-mm3`, `--fill-fraction`, `--gpu-index`, шардирование, multi-process launcher [`render_parallel.py`](file:///home/nikolay/opencv/injector3D/render_parallel.py), fallback малого объёма | 🔄 **Частично реализован (~65%)** | [`reports/step6_cli.md`](file:///home/nikolay/opencv/injector3D/reports/step6_cli.md) |
+| **6. CLI и параллелизация** | `--volume-mm3`, `--fill-fraction`, `--gpu-index`, шардирование, multi-process launcher [`render_parallel.py`](file:///home/nikolay/opencv/injector3D/render_parallel.py), пакетный [`render_batch.py`](file:///home/nikolay/opencv/injector3D/render_batch.py), fallback малого объёма | ✅ **Завершён** | [`reports/step6_cli.md`](file:///home/nikolay/opencv/injector3D/reports/step6_cli.md), [`check_batch.py`](file:///home/nikolay/opencv/injector3D/check_batch.py) |
 | **7. Калибровка и тесты рендера** | Оценка освещения под разными углами, каустики, калибровка мира | ⏳ **В очереди** | [`calib_world.py`](file:///home/nikolay/opencv/injector3D/calib_world.py) |
 | **8. Капли на стенках** | 0–2 капли на внутренней поверхности трубки, детерминированные seed | ⏳ **Не начат** | Конфиг заготовлен в [`injector3d/config.py`](file:///home/nikolay/opencv/injector3D/injector3d/config.py#L59-L67) |
 | **9. Пузырьки у мениска** | 0–N пузырьков воздуха в объёме жидкости | ⏳ **Не начат** | В плане |
@@ -28,6 +32,7 @@
 ### Проверка работоспособности кода
 - `./blender-5.2.3-linux-x64/blender --background --python check_liquid.py` — **ВСЕ ПРОВЕРКИ ПРОЙДЕНЫ** (8 секций, инвариантность объёма, мениск, fast-path, $R_z(\phi)$-инвариантность, граничные объёмы).
 - `python3 check_postprocess.py` — **ВСЕ ПРОВЕРКИ ПРОЙДЕНЫ** (alpha bbox, пересчёт 2D центра, сдвиги, маркер, worker result).
+- `python3 check_batch.py` — **ВСЕ ПРОВЕРКИ ПРОЙДЕНЫ** (матрица, команды, resume, `batch_manifest.json`, dry-run).
 
 ---
 
@@ -93,9 +98,9 @@ flowchart TD
 
 Рекомендуется двигаться по этапам в порядке возрастания сложности:
 
-### Этап 6.2. Завершение пункта 6 (CLI, типы жидкостей, экспорт GLB)
+### Этап 6.2. Завершение пункта 6 (CLI, типы жидкостей, экспорт GLB) — ✅
 
-#### 1. Пресеты и параметры жидкостей
+#### 1. Пресеты и параметры жидкостей — ✅
 - Добавить в [`injector3d/config.py`](file:///home/nikolay/opencv/injector3D/injector3d/config.py) реестр жидкостей `LIQUID_PRESETS`:
   - `water` (вода, текущие параметры): $\text{IOR}=1.33$, $\sigma=0.0728$, $\rho=1000$, $\theta_c=25^\circ$, слабо-жёлтый тинт, плотность 20.0.
   - `glycerol` (глицерин): $\text{IOR}=1.47$, $\sigma=0.063$, $\rho=1260$, $\theta_c\approx 45^\circ$, прозрачный / нейтральный.
@@ -107,19 +112,22 @@ flowchart TD
   `--liquid-type [water|glycerol|ethanol|mineral_oil]` и кастомные переопределения (`--liquid-ior`, `--liquid-density`, `--contact-angle`).
 - Добавить имя типа жидкости в имя PNG и manifest серии (`4.5_..._liq-water_...png`).
 
-#### 2. Экспорт в `.glb`
+#### 2. Экспорт в `.glb` — ✅
 - Добавить CLI-флаг `--export-glb [PATH]`.
 - Экспортировать сцену (меш трубки, меш жидкости с PBR-нодами) в формат GLTF 2.0 Binary (`bpy.ops.export_scene.gltf(...)`) с сохранением названий объектов и базовых материалов.
 
-#### 3. Управление камерой через CLI
+#### 3. Управление камерой через CLI — ✅
 - Поддержать выбор режима камеры:
   - `--camera-preset [reference|studio|orbit]`
   - Возможность задания параметров камеры: дистанция (`--camera-distance`), высота (`--camera-z`), угол pitch/roll.
 
-#### 4. Пакетный генератор датасетов (`render_batch.py`)
-- Скрипт верхнего уровня для генерации матриц датасетов по конфигурационному файлу (YAML/JSON) или диапазонам:
-  - Пример матрицы: `angles = [0, 10, 20, 30]`, `volumes = [2000, 5000, 10000, 15000, 20000]`, `liquids = ['water', 'glycerol']`.
-  - Автоматический запуск через `render_parallel.py` с контролем доступных GPU и сводным единым каталогом датасета.
+#### 4. Пакетный генератор датасетов (`render_batch.py`) — ✅
+- Реализован: JSON-конфиг или диапазоны CLI, матрица
+  `объём/доля × угол × жидкость × камера`.
+- Каждая серия идёт в `<output-dir>/<batch>/<series>/` через
+  `render_parallel.py`; в корне пакета — `batch_manifest.json` и `logs/`.
+- Поддержаны `--limit`, `--resume`, `--keep-going`, `--keep-shards`,
+  `--dry-run`; проверки — `check_batch.py`.
 
 ---
 
@@ -159,8 +167,11 @@ flowchart TD
 # 2. Проверка постобработки, оверлеев и 2D-координат
 python3 check_postprocess.py
 
-# 3. Тест новых CLI-аргументов (liquid presets, dry-run batch)
-./blender-5.2.3-linux-x64/blender --background --python injector3d/create_scene.py -- 4.5 --liquid-type glycerol --tilt-count 1 --tilt-angle 10
+# 3. Проверка batch runner без Blender
+python3 check_batch.py
+
+# 4. Тест новых CLI-аргументов (liquid presets)
+./blender-5.2.3-linux-x64/blender --background --python injector3d/create_scene.py -- --mode ring --liquid-type glycerol --tilt-count 1 --tilt-angle 10
 ```
 
 ### Ручная проверка

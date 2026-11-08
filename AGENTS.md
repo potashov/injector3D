@@ -33,6 +33,11 @@ python3 check_postprocess.py
 # Параллельный рендер серии по GPU (системный python3)
 python3 render_parallel.py --tilt-count 8 --tilt-angle 10 --gpus 0,1
 
+# Пакетный рендер матрицы параметров (системный python3)
+python3 render_batch.py --liquids water,glycerol \
+    --volumes 2000,5000 --tilt-angles 10,20 --gpus 0,1
+python3 check_batch.py
+
 # Диагностика CUDA/GPU
 $BL --background --python check_cuda.py
 $BL --background --python check_build_cuda.py
@@ -40,8 +45,8 @@ $BL --background --python gpu_info.py
 ```
 
 Тестового фреймворка, линтера и typecheck нет — проверка = успешные
-прогоны `check_liquid.py` и `check_postprocess.py` (assert'ы + код
-возврата) и рендер без исключений.
+прогоны `check_liquid.py`, `check_liquid_presets.py`, `check_postprocess.py`
+и `check_batch.py` (assert'ы + код возврата) и рендер без исключений.
 
 ## Версия Blender — проверить первой
 
@@ -185,7 +190,7 @@ $BL --background --python injector3d/create_scene.py -- --mode ring --tilt-count
   проверяет пересчёт и overlay. Композиторный путь без overlay отложен:
   async-worker скрывает Python за рендером следующего кадра.
 
-## Пункт 6 — CLI, пресеты жидкостей, камера, GLB и параллельный рендер — ОСНОВНОЕ РЕАЛИЗОВАНО
+## Пункт 6 — CLI, пресеты жидкостей, камера, GLB и пакетный рендер — РЕАЛИЗОВАНО
 
 - `create_scene.py` принимает `--fill-fraction` или взаимоисключающий
   `--volume-mm3` (абсолютный объём, проверяется по `capacity_mm3()`),
@@ -215,8 +220,15 @@ $BL --background --python injector3d/create_scene.py -- --mode ring --tilt-count
   запусков, не основной рычаг скорости. См. `reports/performance.md` §9.5.
 - `scene.setup_scene(gpu_index=...)` оставляет одно CUDA-устройство;
   без индекса включает все, без CUDA — CPU-fallback.
-- В очереди остаётся пакетный рендер матриц параметров датасетов одним запуском.
-  План и замеры — `reports/step6_cli.md`.
+- `render_batch.py` (системный `python3`) строит матрицу
+  объём/доля × угол × жидкость × камера и запускает по одной серии через
+  `render_parallel.py`. Каждая серия лежит в
+  `<output-dir>/<batch>/<series>/`, логи — в `<batch>/logs/`, сводка —
+  в `<batch>/batch_manifest.json`. Поддерживаются `--config` (JSON),
+  диапазоны через CLI, `--limit`, `--resume`, `--keep-going`,
+  `--keep-shards`, `--dry-run`; `check_batch.py` проверяет матрицу,
+  команды, resume и dry-run без Blender.
+- План и замеры — `reports/step6_cli.md`.
 
 ## Вывод и артефакты
 
@@ -226,6 +238,9 @@ $BL --background --python injector3d/create_scene.py -- --mode ring --tilt-count
 - Каталог прогона — `<база>/<YYYYMMDD_HHMM>/`, база — `--output-dir`
   (по умолчанию `config.OUTPUT_DIR`, т.е. `output/`). `--timestamp`
   фиксирует имя каталога и синхронизирует шарды.
+- Пакетный прогон — `<база>/<batch>/<series>/`; внутри серии лежат PNG,
+  master, manifest и логи шардов, в корне пакета — `batch_manifest.json`
+  и `logs/`. PNG пакета также отслеживаются git.
 - `output/<YYYYMMDD_HHMM>/*.png` **отслеживаются git** как результат
   работы; `.blend`/`.blend1`/`.json`/`.log` игнорируются. Не удаляйте
   чужие рендеры и не считайте `output/` временным каталогом.
