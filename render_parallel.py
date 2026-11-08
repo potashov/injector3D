@@ -25,6 +25,7 @@ PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, PROJECT_DIR)
 
 from injector3d import output_manager as om
+from injector3d import timing
 
 DEFAULT_BLENDER = os.path.join(
     PROJECT_DIR, 'blender-5.2.3-linux-x64', 'blender')
@@ -113,12 +114,15 @@ def _merge_manifests(run_dir, ts, shards, keep):
     ))
     name = om.manifest_filename(liquid, tag)
     path = os.path.join(run_dir, name)
+    timings = timing.summarize_frames(frames)
+    timings['shards'] = shards
     payload = {
         'tag': tag,
         'timestamp': ts,
         'liquid_type': liquid,
         'shards': shards,
         'frames': frames,
+        'timings': timings,
     }
     with open(path, 'w', encoding='utf-8') as fh:
         json.dump(payload, fh, ensure_ascii=False, indent=2)

@@ -39,6 +39,7 @@ from .config import (
     TILT_VARIANTS,
     tilt_ring_variants,
 )
+from . import timing
 from .liquid import contact_center_mm
 from .output_manager import (
     blend_filename,
@@ -226,6 +227,11 @@ def _finish_postprocess_worker(worker, jobs):
                 center = result.get('ellipse_center_2d_px')
                 if center is not None:
                     job['metadata']['ellipse_center_2d_px'] = center
+                process_ms = (result.get('timings_ms') or {}).get(
+                    'postprocess')
+                if (process_ms is not None
+                        and 'timings_ms' in job['metadata']):
+                    job['metadata']['timings_ms']['postprocess'] = process_ms
             except (OSError, ValueError):
                 print(f'  ! Нет результата постобработки: {result_path}')
             finally:
@@ -253,7 +259,8 @@ def _manifest_frames(results):
     return frames
 
 
-def _write_manifest(base, liquid_type, tag, shard_suffix, results):
+def _write_manifest(base, liquid_type, tag, shard_suffix, results,
+                    timer=None):
     """Manifest серии: имя без timestamp, он уже в имени каталога."""
     name = manifest_filename(liquid_type, tag, shard_suffix)
     path = os.path.join(base, name)
@@ -263,6 +270,10 @@ def _write_manifest(base, liquid_type, tag, shard_suffix, results):
         'liquid_type': liquid_type,
         'frames': _manifest_frames(results),
     }
+    if timer is not None:
+        summary = timer.summary()
+        if summary:
+            payload['timings'] = summary
     with open(path, 'w', encoding='utf-8') as fh:
         json.dump(payload, fh, ensure_ascii=False, indent=2)
     print(f'  Manifest: {name}')
@@ -283,7 +294,7 @@ def _prepare_render_scene():
 
 
 def _render_one(scene, final_path, variant_name, metadata=None,
-                postprocess=None, overlay=None):
+                postprocess=None, overlay=None, timings=None):
     """Рендер одного кадра; возвращает job для worker-постобработки.
 
     При включённой постобработке кадр пишется во временный raw, а job
@@ -299,7 +310,8 @@ def _render_one(scene, final_path, variant_name, metadata=None,
         os.close(fd)
         _register_temp(raw_path)
         scene.render.filepath = raw_path
-        bpy.ops.render.render(write_still=True)
+        with timing.timed(timings, 'render'):
+            bpy.ops.render.render(write_still=True)
         print(f'  Кадр: {variant_name} -> raw')
         return {'raw': raw_path, 'final': final_path, 'metadata': meta}
 
@@ -312,7 +324,8 @@ def _render_one(scene, final_path, variant_name, metadata=None,
     if raw_center is not None:
         meta['ellipse_center_2d_px'] = list(raw_center)
     scene.render.filepath = final_path
-    bpy.ops.render.render(write_still=True)
+    with timing.timed(timings, 'render'):
+        bpy.ops.render.render(write_still=True)
     print(f'  Рендер: {variant_name} -> {os.path.basename(final_path)}')
     return {'raw': None, 'final': final_path, 'metadata': meta}
 
@@ -445,7 +458,7 @@ def export_scene_glb(filepath, objects=None):
 
 def render_tube(tube, camera, output_dir=None, on_tilt=None,
                 postprocess=None, overlay=None, tag=None,
-                liquid_type=None):
+                liquid_type=None, timer=None):
     """Рендер трубки под каждым из TILT_VARIANTS.
 
     Parameters
@@ -464,9 +477,12 @@ def render_tube(tube, camera, output_dir=None, on_tilt=None,
         Настройки постобработки и подписей; None — значения из config.
     liquid_type : str | None
         Тип жидкости для имён файлов.
+    timer : injector3d.timing.Timer | None
+        Общий таймер прогона; None — создать локальный.
     """
     base = ensure_dir(output_dir
                       or render_dir(OUTPUT_DIR, new_timestamp()))
+    timer = timer or timing.Timer(name='render_tube')
 
     attach_camera_to_tube(camera, tube)
 
@@ -479,37 +495,47 @@ def render_tube(tube, camera, output_dir=None, on_tilt=None,
 
     try:
         for variant_name, tilt_euler in TILT_VARIANTS:
-            tube.rotation_euler = (
-                math.radians(tilt_euler[0]),
-                math.radians(tilt_euler[1]),
-                math.radians(tilt_euler[2]),
-            )
-            bpy.context.view_layer.update()
-            info = (on_tilt(variant_name, tilt_euler)
-                    if on_tilt is not None else None)
+            frame_ms = {} if timer.enabled else None
+            with timing.timed(frame_ms, 'frame_total'):
+                with timing.timed(frame_ms, 'tilt_apply'):
+                    tube.rotation_euler = (
+                        math.radians(tilt_euler[0]),
+                        math.radians(tilt_euler[1]),
+                        math.radians(tilt_euler[2]),
+                    )
+                    bpy.context.view_layer.update()
+                with timing.timed(frame_ms, 'liquid_build'):
+                    info = (on_tilt(variant_name, tilt_euler)
+                            if on_tilt is not None else None)
 
-            liq_type = info.get('liquid_type') if info else None
-            liq_cfg = info.get('liquid_config') if info else None
-            volume = info.get('volume_mm3') if info else None
-            center = _center_for_info(tube, info)
-            meta = _frame_metadata(
-                volume, None, _tilt_deg_from_matrix(tube.matrix_world),
-                center, scene, liquid_type=liq_type, liquid_config=liq_cfg)
-            render_fname = render_filename(
-                liq_type, variant_name, tag, volume)
-            final_path = os.path.join(base, render_fname)
+                liq_type = info.get('liquid_type') if info else None
+                liq_cfg = info.get('liquid_config') if info else None
+                volume = info.get('volume_mm3') if info else None
+                center = _center_for_info(tube, info)
+                meta = _frame_metadata(
+                    volume, None, _tilt_deg_from_matrix(tube.matrix_world),
+                    center, scene, liquid_type=liq_type,
+                    liquid_config=liq_cfg)
+                render_fname = render_filename(
+                    liq_type, variant_name, tag, volume)
+                final_path = os.path.join(base, render_fname)
 
-            # Сохраняем .blend (историческое поведение render_tube)
-            blend_fname = blend_filename(liq, variant_name, tag)
-            blend_path = os.path.join(base, blend_fname)
-            bpy.ops.wm.save_as_mainfile(filepath=blend_path)
-            print(f'  Сохранён: {blend_fname}')
+                # Сохраняем .blend (историческое поведение render_tube)
+                blend_fname = blend_filename(liq, variant_name, tag)
+                blend_path = os.path.join(base, blend_fname)
+                with timing.timed(frame_ms, 'save_blend'):
+                    bpy.ops.wm.save_as_mainfile(filepath=blend_path)
+                print(f'  Сохранён: {blend_fname}')
 
-            job = _render_one(
-                scene, final_path, variant_name, meta, postprocess, overlay)
-            results.append(job)
-            if worker is not None and job['raw']:
-                _submit_postprocess(worker, job, opts)
+                job = _render_one(
+                    scene, final_path, variant_name, meta, postprocess,
+                    overlay, timings=frame_ms)
+                if frame_ms is not None:
+                    job['metadata']['timings_ms'] = frame_ms
+                results.append(job)
+                if worker is not None and job['raw']:
+                    with timing.timed(frame_ms, 'postprocess_submit'):
+                        _submit_postprocess(worker, job, opts)
         if worker is not None:
             _finish_postprocess_worker(
                 worker, [job for job in results if job['raw']])
@@ -517,7 +543,10 @@ def render_tube(tube, camera, output_dir=None, on_tilt=None,
     finally:
         _stop_worker_quietly(worker)
 
-    _write_manifest(base, liq, tag, '', results)
+    for job in results:
+        timer.record(job['metadata'].get('timings_ms'))
+    timer.finish()
+    _write_manifest(base, liq, tag, '', results, timer=timer)
 
 
 # ─── tilt_matrix ─────────────────────────────────────────────────────
@@ -543,7 +572,7 @@ def render_ring(tube, liquid_upright, liquid_tilted,
                 output_dir=None, n=4, angle=10.0,
                 info_upright=None, info_tilted=None,
                 postprocess=None, overlay=None, shard=None,
-                tag=None, liquid_type=None):
+                tag=None, liquid_type=None, timer=None):
     """Рендер N+1 кадров: вертикаль + N плоскостей наклона при угле `angle`.
 
     Камера — дочерняя трубке (привязка сделана в `create_scene` на этапе
@@ -585,6 +614,7 @@ def render_ring(tube, liquid_upright, liquid_tilted,
     tag = f'{geometric_tag}_{tag}' if tag else geometric_tag
     base = ensure_dir(output_dir
                       or render_dir(OUTPUT_DIR, new_timestamp()))
+    timer = timer or timing.Timer(name='render_ring')
 
     scene = _prepare_render_scene()
 
@@ -598,7 +628,8 @@ def render_ring(tube, liquid_upright, liquid_tilted,
     liq = liquid_type or DEFAULT_LIQUID_TYPE
     master_fname = master_blend_filename(liq, tag, shard_suffix)
     master_path = os.path.join(base, master_fname)
-    bpy.ops.wm.save_as_mainfile(filepath=master_path)
+    with timing.timed(timer, 'master_blend'):
+        bpy.ops.wm.save_as_mainfile(filepath=master_path)
     print(f'  Сохранён master: {master_fname}')
 
     opts = postprocess or SCENE_POSTPROCESS
@@ -607,36 +638,45 @@ def render_ring(tube, liquid_upright, liquid_tilted,
     results = []
     try:
         for variant_name, azimuth_deg in variants:
-            if azimuth_deg is None:
-                tube.matrix_world = Matrix.Identity(4)
-                liquid_upright.hide_render = False
-                liquid_tilted.hide_render = True
-                info = info_upright
-                tilt_deg = 0.0
-            else:
-                tube.matrix_world = tilt_matrix(theta_rad, azimuth_deg)
-                liquid_tilted.rotation_euler = (0.0, 0.0,
-                                                math.radians(azimuth_deg))
-                liquid_upright.hide_render = True
-                liquid_tilted.hide_render = False
-                info = info_tilted
-                tilt_deg = angle
-            bpy.context.view_layer.update()
+            frame_ms = {} if timer.enabled else None
+            with timing.timed(frame_ms, 'frame_total'):
+                with timing.timed(frame_ms, 'tilt_apply'):
+                    if azimuth_deg is None:
+                        tube.matrix_world = Matrix.Identity(4)
+                        liquid_upright.hide_render = False
+                        liquid_tilted.hide_render = True
+                        info = info_upright
+                        tilt_deg = 0.0
+                    else:
+                        tube.matrix_world = tilt_matrix(
+                            theta_rad, azimuth_deg)
+                        liquid_tilted.rotation_euler = (
+                            0.0, 0.0, math.radians(azimuth_deg))
+                        liquid_upright.hide_render = True
+                        liquid_tilted.hide_render = False
+                        info = info_tilted
+                        tilt_deg = angle
+                    bpy.context.view_layer.update()
 
-            liq_type = info.get('liquid_type') if info else None
-            liq_cfg = info.get('liquid_config') if info else None
-            volume = info.get('volume_mm3') if info else None
-            center = _center_for_info(tube, info)
-            meta = _frame_metadata(volume, azimuth_deg, tilt_deg, center,
-                                   scene, liquid_type=liq_type, liquid_config=liq_cfg)
-            render_fname = render_filename(
-                liq_type, variant_name, tag, volume)
-            final_path = os.path.join(base, render_fname)
-            job = _render_one(
-                scene, final_path, variant_name, meta, postprocess, overlay)
-            results.append(job)
-            if worker is not None and job['raw']:
-                _submit_postprocess(worker, job, opts)
+                liq_type = info.get('liquid_type') if info else None
+                liq_cfg = info.get('liquid_config') if info else None
+                volume = info.get('volume_mm3') if info else None
+                center = _center_for_info(tube, info)
+                meta = _frame_metadata(
+                    volume, azimuth_deg, tilt_deg, center, scene,
+                    liquid_type=liq_type, liquid_config=liq_cfg)
+                render_fname = render_filename(
+                    liq_type, variant_name, tag, volume)
+                final_path = os.path.join(base, render_fname)
+                job = _render_one(
+                    scene, final_path, variant_name, meta, postprocess,
+                    overlay, timings=frame_ms)
+                if frame_ms is not None:
+                    job['metadata']['timings_ms'] = frame_ms
+                results.append(job)
+                if worker is not None and job['raw']:
+                    with timing.timed(frame_ms, 'postprocess_submit'):
+                        _submit_postprocess(worker, job, opts)
         if worker is not None:
             _finish_postprocess_worker(
                 worker, [job for job in results if job['raw']])
@@ -644,7 +684,10 @@ def render_ring(tube, liquid_upright, liquid_tilted,
     finally:
         _stop_worker_quietly(worker)
 
-    _write_manifest(base, liq, tag, shard_suffix, results)
+    for job in results:
+        timer.record(job['metadata'].get('timings_ms'))
+    timer.finish()
+    _write_manifest(base, liq, tag, shard_suffix, results, timer=timer)
 
     # Оставляем сцену в вертикальном положении для сохранения/отладки.
     tube.matrix_world = Matrix.Identity(4)

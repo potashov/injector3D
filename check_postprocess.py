@@ -76,7 +76,8 @@ def main():
             result = json.load(fh)
         assert result['ellipse_center_2d_px'] == [110.0, 100.0], result
         assert result['shift'] == 10
-        print('  OK  RGBA, shift, result JSON')
+        assert result['timings_ms']['postprocess'] >= 0.0, result
+        print('  OK  RGBA, shift, result JSON с длительностью')
 
         final_height = 160
         final = os.path.join(tmp, 'rgb.png')

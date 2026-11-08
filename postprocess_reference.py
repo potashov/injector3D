@@ -14,6 +14,8 @@ import sys
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
+from injector3d.timing import now_ms
+
 
 def _parse_color(text):
     """Цвет ``R,G,B[,A]`` в диапазоне 0..255."""
@@ -131,6 +133,7 @@ def _finalize_center(meta, scale, shift):
 
 
 def _process(raw_path, final_path, args, meta=None):
+    started = now_ms()
     if meta is None:
         meta = {}
         if args.metadata:
@@ -193,6 +196,9 @@ def _process(raw_path, final_path, args, meta=None):
             'shift': shift,
             'raw_height_px': raw_h,
             'ellipse_center_2d_px': meta.get('ellipse_center_2d_px'),
+            'timings_ms': {
+                'postprocess': round(now_ms() - started, 3),
+            },
         }
         with open(result_path, 'w', encoding='utf-8') as fh:
             json.dump(result, fh, ensure_ascii=False)

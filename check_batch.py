@@ -107,7 +107,26 @@ def main():
         assert saved['batch'] == 'batch'
         assert saved['series_count'] == 0
         assert saved['matrix']['liquids'] == ['water', 'glycerol']
-        print('  OK  batch_manifest.json пишется атомарно')
+        assert 'timings' in saved and 'by_liquid_type' in saved['timings']
+        print('  OK  batch_manifest.json пишется атомарно, с timings')
+
+        timed_records = [
+            {'id': 'a', 'liquid_type': 'water', 'volume_mm3': 2000,
+             'tilt_angle_deg': 10, 'tilt_count': 1,
+             'camera_preset': 'reference', 'wall_ms': 1000.0,
+             'timings': {'stages': {
+                 'render': {'total_ms': 800.0, 'count': 2}}}},
+            {'id': 'b', 'liquid_type': 'water', 'volume_mm3': 5000,
+             'tilt_angle_deg': 20, 'tilt_count': 1,
+             'camera_preset': 'reference', 'wall_ms': 2000.0,
+             'timings': {'stages': {
+                 'render': {'total_ms': 1700.0, 'count': 2}}}},
+        ]
+        summary = rb._batch_timings(timed_records)
+        assert summary['wall_ms']['total_ms'] == 3000.0, summary
+        assert summary['stages']['render']['total_ms'] == 2500.0, summary
+        assert summary['by_volume_mm3']['2000']['series_count'] == 1
+        print('  OK  _batch_timings: общие и групповые агрегаты')
 
         config = os.path.join(tmp, 'batch.json')
         with open(config, 'w', encoding='utf-8') as fh:

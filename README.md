@@ -134,13 +134,16 @@ injector3d/
 ├── materials.py      # Материалы: пластик PMMA, жидкость с поглощением
 ├── scene.py          # Настройка сцены, камеры, освещения, CUDA-устройств
 ├── render.py         # Рендер под разными углами
+├── timing.py         # Тайминги этапов, кадров, серий и пакетов
 ├── output_manager.py # Каталог прогона и имена файлов вывода
 └── create_scene.py   # Entry-point
 render_reference.py   # Рендер кадра под референс 06120
 postprocess_reference.py  # Заливка (опц.), масштаб/сдвиг, подписи
 render_parallel.py    # Параллельный рендер серии по GPU + merge manifest
 render_batch.py       # Пакетный рендер матриц параметров
+summarize_timings.py  # Сводка таймингов: table/CSV/JSON/MD
 check_batch.py        # Проверки batch runner без Blender
+check_timing.py       # Проверки таймингов без Blender
 check_liquid.py       # Числовая самопроверка объёма и уровня
 check_liquid_presets.py   # Самопроверка физики пресетов жидкостей
 check_postprocess.py  # Проверки постобработки без Blender
@@ -219,9 +222,11 @@ $BL --background --python injector3d/create_scene.py -- \
 ```bash
 blender --background --python check_liquid.py
 
-# Проверки постобработки и batch runner (системный python3)
+# Проверки постобработки, batch runner и таймингов (системный python3)
 python3 check_postprocess.py
 python3 check_batch.py
+python3 check_timing.py
+python3 summarize_timings.py output/<прогон>/water_manifest.json
 ```
 
 ## Состояние
@@ -252,6 +257,9 @@ python3 check_batch.py
   `--export-glb`, `--gpu-index`, шарды, `render_parallel.py` и пакетный
   `render_batch.py`; проверки — `check_batch.py`,
   `reports/step6_cli.md`
+- ✅ Тайминги — этапы сцены/кадра/серии/пакета в manifest,
+  `summarize_timings.py`, `check_timing.py`;
+  отчёт — `reports/timing_instrumentation.md`
 - ⏳ Пункт 7 — финальные тестовые рендеры
 - ⏳ Пункт 8 — капли на внутренней стенке трубки
 - ⏳ Пункт 9 — пузырьки в жидкости в районе мениска

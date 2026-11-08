@@ -41,6 +41,7 @@ sys.path.insert(0, PROJECT_DIR)
 
 from injector3d import config as cfg
 from injector3d import output_manager as om
+from injector3d import timing
 
 LAUNCHER = os.path.join(PROJECT_DIR, 'render_parallel.py')
 BATCH_MANIFEST = om.batch_manifest_filename()
@@ -323,13 +324,17 @@ def _find_final_manifest(series_dir):
     return sorted(paths)[-1] if paths else None
 
 
-def _frame_count(manifest_path):
+def _read_manifest(manifest_path):
     try:
         with open(manifest_path, 'r', encoding='utf-8') as fh:
             data = json.load(fh)
-        return len(data.get('frames', []))
+        return data if isinstance(data, dict) else {}
     except (OSError, ValueError):
-        return 0
+        return {}
+
+
+def _frame_count(manifest_path):
+    return len(_read_manifest(manifest_path).get('frames', []))
 
 
 def _completed_manifest(series_dir, expected_frames):
@@ -356,6 +361,10 @@ def _record(series, command):
         'manifest': None,
         'frames': 0,
         'log': None,
+        'started_at': None,
+        'finished_at': None,
+        'wall_ms': None,
+        'timings': None,
     })
     return record
 
@@ -370,6 +379,10 @@ def _run_series(record, batch_root, resume=False):
             record['returncode'] = 0
             record['manifest'] = _relative(manifest, batch_root)
             record['frames'] = _frame_count(manifest)
+            record['timings'] = _read_manifest(manifest).get('timings')
+            record['started_at'] = timing.local_now_iso()
+            record['finished_at'] = record['started_at']
+            record['wall_ms'] = 0.0
             print(f'  пропуск (уже готово): {record["manifest"]}')
             return record
 
@@ -378,6 +391,8 @@ def _run_series(record, batch_root, resume=False):
     log_path = os.path.join(log_dir, f'{record["id"]}.log')
     record['log'] = _relative(log_path, batch_root)
     print(f'  лог: {log_path}')
+    record['started_at'] = timing.local_now_iso()
+    started = timing.now_ms()
     try:
         with open(log_path, 'w', encoding='utf-8') as log:
             log.write('# ' + shlex.join(record['command']) + '\n\n')
@@ -388,14 +403,30 @@ def _run_series(record, batch_root, resume=False):
     except OSError as exc:
         record['returncode'] = -1
         record['error'] = str(exc)
+    finally:
+        record['wall_ms'] = round(timing.now_ms() - started, 3)
+        record['finished_at'] = timing.local_now_iso()
 
     manifest = _find_final_manifest(series_dir)
     if manifest:
         record['manifest'] = _relative(manifest, batch_root)
         record['frames'] = _frame_count(manifest)
+        record['timings'] = _read_manifest(manifest).get('timings')
     record['status'] = ('ok' if record['returncode'] == 0
                         else 'failed')
     return record
+
+
+def _batch_timings(records):
+    summary = timing.aggregate_records(records)
+    summary['by_liquid_type'] = timing.group_records(records, 'liquid_type')
+    summary['by_volume_mm3'] = timing.group_records(records, 'volume_mm3')
+    summary['by_tilt_angle_deg'] = timing.group_records(
+        records, 'tilt_angle_deg')
+    summary['by_tilt_count'] = timing.group_records(records, 'tilt_count')
+    summary['by_camera_preset'] = timing.group_records(
+        records, 'camera_preset')
+    return summary
 
 
 def _manifest_payload(batch_id, batch_root, data, records, created_at):
@@ -415,6 +446,7 @@ def _manifest_payload(batch_id, batch_root, data, records, created_at):
             'extra_args': data['extra_args'],
         },
         'series_count': len(records),
+        'timings': _batch_timings(records),
         'series': records,
     }
 
@@ -426,6 +458,26 @@ def _write_manifest(batch_root, payload):
         json.dump(payload, fh, ensure_ascii=False, indent=2)
     os.replace(tmp, path)
     return path
+
+
+def _stage_total(record, name):
+    timings = record.get('timings') or {}
+    stage = (timings.get('stages') or {}).get(name) or {}
+    return stage.get('total_ms')
+
+
+def _print_series_timing(record):
+    parts = []
+    wall_ms = record.get('wall_ms')
+    if wall_ms is not None:
+        parts.append(f'wall={wall_ms / 1000.0:.2f} с')
+    for name in ('render', 'postprocess', 'liquid_upright',
+                 'liquid_tilted', 'liquid_build'):
+        total = _stage_total(record, name)
+        if total is not None:
+            parts.append(f'{name}={total / 1000.0:.2f} с')
+    if parts:
+        print('  время: ' + ', '.join(parts))
 
 
 def _split_list(value):
@@ -553,6 +605,8 @@ def main():
     for index, record in enumerate(records, 1):
         print(f'\n[{index}/{len(records)}] {record["id"]}')
         _run_series(record, batch_root, resume=args.resume)
+        _print_series_timing(record)
+        payload['timings'] = _batch_timings(records)
         _write_manifest(batch_root, payload)
         if record['status'] == 'failed':
             failed = True
@@ -565,6 +619,16 @@ def main():
     bad = sum(1 for r in records if r['status'] == 'failed')
     print(f'\nИтог: ok={ok}, skipped={skipped}, failed={bad}, '
           f'всего={len(records)}')
+    batch_timings = _batch_timings(records)
+    wall = batch_timings.get('wall_ms') or {}
+    if wall.get('total_ms') is not None:
+        print(f'Время пакета: wall={wall["total_ms"] / 1000.0:.2f} с')
+    stages = batch_timings.get('stages') or {}
+    render = stages.get('render') or {}
+    postprocess = stages.get('postprocess') or {}
+    if render.get('total_ms') is not None:
+        print(f'  render={render["total_ms"] / 1000.0:.2f} с, '
+              f'postprocess={postprocess.get("total_ms", 0.0) / 1000.0:.2f} с')
     print(f'Manifest пакета: {os.path.join(batch_root, BATCH_MANIFEST)}')
     if failed or bad:
         raise SystemExit(1)

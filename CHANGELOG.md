@@ -2,6 +2,32 @@
 
 ## [Не выпущено]
 
+### Добавлено — тайминги по этапам, сериям и пакетам
+- `injector3d/timing.py`: `Timer`, `timed()`, статистика
+  (`count/total/mean/median/p95/min/max`), агрегаты кадров, серий и
+  batch-записей; модуль не зависит от `bpy`.
+- `create_scene.py`: этапы `scene_init`, `tube_build`, `validate_tube`,
+  `materials`, `attach_camera`, `liquid_upright`, `liquid_tilted`,
+  `liquid_initial`, `validate_liquid`, `export_glb`; флаги `--timing` /
+  `--no-timing` (`config.TIMING_ENABLED = True`).
+- `render.py`: в каждом кадре — `tilt_apply`, `liquid_build`,
+  `save_blend`, `render`, `postprocess_submit`, `frame_total`; в серии —
+  `master_blend` и суммарные `timings`. Длительность постобработки
+  возвращается из `postprocess_reference.py` и попадает в
+  `frames[].timings_ms.postprocess`.
+- `render_parallel.py`: `timings` объединённого manifest пересчитываются
+  из кадров, поэтому multi-shard не учитывает upright дважды.
+- `render_batch.py`: `started_at`, `finished_at`, `wall_ms`, `timings`
+  каждой серии; общий `batch_manifest.json.timings` с группами по
+  жидкости, объёму, углу, числу наклонов и камере.
+- `summarize_timings.py`: table/CSV/JSON/MD по manifest прогона или
+  пакета; `check_timing.py` проверяет таймер, кадры, batch-агрегаты и
+  слияние шардов без Blender.
+- Smoke-прогоны: ring N=1 θ=10° 2000 мм³ (2 кадра, постобработка) и
+  tube 2000 мм³ (5 кадров); тайминги записаны в manifest, batch smoke
+  записал `timings` в `batch_manifest.json`.
+- Документация: `reports/timing_instrumentation.md`, `AGENTS.md`.
+
 ### Добавлено — пакетный рендер матриц параметров (пункт 6)
 - `render_batch.py` (системный `python3`): матрица
   объём/доля × угол × жидкость × камера, запуск серий через

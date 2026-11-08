@@ -40,6 +40,7 @@ from injector3d.scene import setup_scene, attach_camera_to_tube
 from injector3d.render import render_tube, render_ring, tilt_matrix, export_scene_glb
 from injector3d import config as cfg
 from injector3d import output_manager as om
+from injector3d import timing
 from injector3d.config import (
     INNER_DIAMETER,
     HEIGHT,
@@ -289,7 +290,7 @@ def _parse_cli(tail):
     liquid_type, liquid_ior, liquid_density, surface_tension,
     contact_angle, absorption_density, camera_preset, camera_distance,
     camera_z, camera_target_z, camera_lens, camera_roll,
-    camera_distortion, export_glb_path.
+    camera_distortion, export_glb_path, timing.
     """
     mode = 'ring'
     output_dir = None
@@ -320,10 +321,19 @@ def _parse_cli(tail):
     camera_distortion = None
 
     export_glb_path = None
+    timing_enabled = None
 
     i = 0
     while i < len(tail):
         arg = tail[i]
+        if arg == '--no-timing':
+            timing_enabled = False
+            i += 1
+            continue
+        if arg == '--timing':
+            timing_enabled = True
+            i += 1
+            continue
         if arg == '--mode' and i + 1 < len(tail):
             mode = tail[i + 1].strip().lower()
             i += 2
@@ -456,6 +466,7 @@ def _parse_cli(tail):
         'camera_roll': camera_roll,
         'camera_distortion': camera_distortion,
         'export_glb_path': export_glb_path,
+        'timing': timing_enabled,
     }
 
 
@@ -491,6 +502,8 @@ def main():
     camera_roll = opts['camera_roll']
     camera_distortion = opts['camera_distortion']
     export_glb_path = opts['export_glb_path']
+    timing_enabled = (cfg.TIMING_ENABLED if opts['timing'] is None
+                      else opts['timing'])
 
     postprocess, overlay = parse_render_options(tail)
 
@@ -551,6 +564,7 @@ def main():
     # `--output-dir` — это база: прогон всегда в подкаталоге по ts.
     ts = timestamp or om.new_timestamp()
     run_dir = om.render_dir(output_dir or cfg.OUTPUT_DIR, ts)
+    timer = timing.Timer(enabled=timing_enabled, name=ts)
 
     print(f"=== injector3D — {'N+1 (ring)' if is_ring else '5 ракурсов (tube)'}"
           f" + жидкость + материалы ===")
@@ -558,19 +572,23 @@ def main():
 
     # 1. Сцена
     print("1/5  Настройка сцены...")
-    camera = setup_scene(gpu_index=gpu_index, camera_config=camera_config)
+    with timer.measure('scene_init'):
+        camera = setup_scene(gpu_index=gpu_index,
+                             camera_config=camera_config)
     print("   ✅ Сцена готова.\n")
 
     # 2. Геометрия
     print("2/5  Создание геометрии трубки...")
-    tube = create_tube("Tube")
-    tube.data.name = "Tube_Mesh"
+    with timer.measure('tube_build'):
+        tube = create_tube("Tube")
+        tube.data.name = "Tube_Mesh"
     print(f"   ✅ {tube.name}: ID={INNER_DIAMETER}мм, H={HEIGHT}мм, "
           f"W={WALL_THICKNESS}мм\n")
 
     # 3. Валидация
     print("3/5  Валидация геометрии...")
-    validate_tube(tube)
+    with timer.measure('validate_tube'):
+        validate_tube(tube)
     print("   ✅ Готово.\n")
 
     # 4. Материалы и жидкость
@@ -582,10 +600,12 @@ def main():
     print(f"   Вместимость полости: {capacity:.2f} мм³, "
           f"цель {fill_fraction * 100:.0f}% = {target_mm3:.2f} мм³")
 
-    mat_plastic = create_material_plastic("Plastic")
-    mat_liquid = create_material_liquid("Liquid", liquid_config=liquid_config)
-    tube.data.materials.append(mat_plastic)
-    liquid.data.materials.append(mat_liquid)
+    with timer.measure('materials'):
+        mat_plastic = create_material_plastic("Plastic")
+        mat_liquid = create_material_liquid(
+            "Liquid", liquid_config=liquid_config)
+        tube.data.materials.append(mat_plastic)
+        liquid.data.materials.append(mat_liquid)
     print(f"   ✅ Трубка: {tube.data.materials[0].name} "
           f"(IOR={cfg.IOR_PMMA}, transmission=1.0, roughness=0.0)")
     print(f"   ✅ Жидкость ({liquid_config.get('display_name', 'Liquid')}): "
@@ -605,21 +625,24 @@ def main():
         #    камера повторяет любой последующий поворот трубки.
         tube.matrix_world = Matrix.Identity(4)
         bpy.context.view_layer.update()
-        attach_camera_to_tube(camera, tube)
+        with timer.measure('attach_camera'):
+            attach_camera_to_tube(camera, tube)
 
         # 1) upright-меш: трубка вертикальна
-        info_up = build_liquid(liquid, tube, target_mm3, use_fast=True,
-                               liquid_config=liquid_config)
-        liquid_upright = _dup_mesh_object(liquid)
-        liquid_upright.name = "Liquid_upright"
+        with timer.measure('liquid_upright'):
+            info_up = build_liquid(liquid, tube, target_mm3, use_fast=True,
+                                   liquid_config=liquid_config)
+            liquid_upright = _dup_mesh_object(liquid)
+            liquid_upright.name = "Liquid_upright"
 
         # 2) наклонный меш при φ = 0: наклон θ вокруг точки опоры
         tube.matrix_world = tilt_matrix(math.radians(angle), 0.0)
         bpy.context.view_layer.update()
-        info_t = build_liquid(liquid, tube, target_mm3, use_fast=True,
-                              liquid_config=liquid_config)
-        liquid_tilted = _dup_mesh_object(liquid)
-        liquid_tilted.name = "Liquid_tilted"
+        with timer.measure('liquid_tilted'):
+            info_t = build_liquid(liquid, tube, target_mm3, use_fast=True,
+                                  liquid_config=liquid_config)
+            liquid_tilted = _dup_mesh_object(liquid)
+            liquid_tilted.name = "Liquid_tilted"
 
         # 3) Трубка обратно вертикально. Камера остаётся дочерней:
         #    в рендере меняем только tube.matrix_world.
@@ -634,8 +657,9 @@ def main():
               f"V={info_up['volume_mm3']:.2f} мм³")
         print(f"   ✅ Tilted: уровень {info_t['level_mm']:.3f} мм, "
               f"V={info_t['volume_mm3']:.2f} мм³")
-        validate_liquid(liquid_upright, target_mm3, info_up)
-        validate_liquid(liquid_tilted, target_mm3, info_t)
+        with timer.measure('validate_liquid'):
+            validate_liquid(liquid_upright, target_mm3, info_up)
+            validate_liquid(liquid_tilted, target_mm3, info_t)
         print("   ✅ Жидкость: 2 меша (upright + наклонённый)\n")
     else:
         # Обычный рендер: перестраиваем жидкость на каждый наклон
@@ -649,7 +673,8 @@ def main():
                   f"(Δ {info['error_mm3']:+.3f}){flag}")
             return info
 
-        info = on_tilt('upright', (0.0, 0.0, 0.0))
+        with timer.measure('liquid_initial'):
+            info = on_tilt('upright', (0.0, 0.0, 0.0))
         if info['spilled']:
             print(f"   ⚠  Заполнение {fill_fraction * 100:.0f}% переливается "
                   f"через край: максимум {info['volume_mm3']:.2f} мм³")
@@ -658,7 +683,8 @@ def main():
         print(f"   ✅ Жидкость: {liquid.data.materials[0].name} "
               f"(IOR={liquid_config['ior']}, "
               f"absorption density={liquid_config['absorption_density']})")
-        validate_liquid(liquid, target_mm3, info)
+        with timer.measure('validate_liquid'):
+            validate_liquid(liquid, target_mm3, info)
     print("   ✅ Готово.\n")
 
     # 5. Экспорт GLB (если запрошен) — в каталог прогона
@@ -673,7 +699,8 @@ def main():
                 objs_to_export.append(liquid_upright)
         elif liquid:
             objs_to_export.append(liquid)
-        export_scene_glb(export_glb_path, objects=objs_to_export)
+        with timer.measure('export_glb'):
+            export_scene_glb(export_glb_path, objects=objs_to_export)
 
     # 6. Рендер
     if is_ring:
@@ -684,12 +711,14 @@ def main():
                     postprocess=postprocess, overlay=overlay,
                     shard=((shard_index, shard_count)
                            if shard_count > 1 else None),
-                    tag=tag, liquid_type=liquid_config['name'])
+                    tag=tag, liquid_type=liquid_config['name'],
+                    timer=timer)
     else:
         print("5/5  Рендер под 5 углами...")
         render_tube(tube, camera, output_dir=run_dir, on_tilt=on_tilt,
                     postprocess=postprocess, overlay=overlay,
-                    tag=tag, liquid_type=liquid_config['name'])
+                    tag=tag, liquid_type=liquid_config['name'],
+                    timer=timer)
     print("   ✅ Готово.\n")
 
     print(f"=== Прогон завершён: {run_dir} ===")

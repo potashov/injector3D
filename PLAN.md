@@ -140,6 +140,18 @@
   `--keep-going`, `--dry-run`; проверки — `check_batch.py`.
 - План и проверки — `reports/step6_cli.md`.
 
+### ✅ Тайминги по этапам — РЕАЛИЗОВАНО
+- `injector3d/timing.py`: `Timer`, `timed()`, статистика и агрегаты без
+  зависимости от `bpy`.
+- Manifest серии содержит `timings`, кадр — `timings_ms`
+  (`tilt_apply`, `liquid_build`, `save_blend`, `render`, `postprocess`,
+  `frame_total` и др.).
+- `batch_manifest.json` содержит `wall_ms` и `timings` каждой серии,
+  общий блок с группами по жидкости/объёму/углу/камере.
+- `summarize_timings.py` — table/CSV/JSON/MD; `check_timing.py` —
+  проверки без Blender; `--no-timing` отключает запись.
+- Анализ, схема и smoke-замеры — `reports/timing_instrumentation.md`.
+
 ### 7. Тестовые рендеры
 - Рендер под разными углами
 - Проверка качества (блики, прозрачность, каустики)

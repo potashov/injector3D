@@ -38,6 +38,11 @@ python3 render_batch.py --liquids water,glycerol \
     --volumes 2000,5000 --tilt-angles 10,20 --gpus 0,1
 python3 check_batch.py
 
+# Проверки и сводка таймингов (системный python3, без Blender)
+python3 check_timing.py
+python3 summarize_timings.py output/<прогон>/water_manifest.json
+python3 summarize_timings.py output/<batch>/batch_manifest.json --by liquid_type
+
 # Диагностика CUDA/GPU
 $BL --background --python check_cuda.py
 $BL --background --python check_build_cuda.py
@@ -45,8 +50,9 @@ $BL --background --python gpu_info.py
 ```
 
 Тестового фреймворка, линтера и typecheck нет — проверка = успешные
-прогоны `check_liquid.py`, `check_liquid_presets.py`, `check_postprocess.py`
-и `check_batch.py` (assert'ы + код возврата) и рендер без исключений.
+прогоны `check_liquid.py`, `check_liquid_presets.py`, `check_postprocess.py`,
+`check_batch.py` и `check_timing.py` (assert'ы + код возврата) и рендер без
+исключений.
 
 ## Версия Blender — проверить первой
 
@@ -106,6 +112,10 @@ $BL --background --python gpu_info.py
     `Rz(φ)·Ry(θ)` — там φ сокращался, и все кадры были идентичны.
   Рендер 1200×1200 в RGBA с `film_transparent=True`, Lensdist
   `use_fit=False`, затем опциональная постобработка.
+- `injector3d/timing.py` — тайминги без `bpy`: `Timer`, `timed()`,
+  статистика, агрегаты кадров/серий/пакета. Пишутся в `timings` manifest
+  серии, `timings_ms` кадра и `timings` `batch_manifest.json`;
+  отключаются `--no-timing`.
 - `injector3d/output_manager.py` — единый источник путей и имён вывода.
   Каталог прогона: `<база>/<YYYYMMDD_HHMM>/`, база — `--output-dir`
   (по умолчанию `config.OUTPUT_DIR`). Имена: `<жидкость>_<ракурс>[_<tag>]
@@ -227,8 +237,13 @@ $BL --background --python injector3d/create_scene.py -- --mode ring --tilt-count
   в `<batch>/batch_manifest.json`. Поддерживаются `--config` (JSON),
   диапазоны через CLI, `--limit`, `--resume`, `--keep-going`,
   `--keep-shards`, `--dry-run`; `check_batch.py` проверяет матрицу,
-  команды, resume и dry-run без Blender.
-- План и замеры — `reports/step6_cli.md`.
+  команды, resume и dry-run без Blender. В каждой записи серии есть
+  `started_at`, `finished_at`, `wall_ms`, `timings`; общая сводка —
+  в `batch_manifest.json.timings` с группами по параметрам матрицы.
+- `summarize_timings.py` читает manifest прогона или пакета и печатает
+  table/CSV/JSON/MD; `check_timing.py` проверяет тайминги без Blender.
+- План и замеры — `reports/step6_cli.md`,
+  `reports/timing_instrumentation.md`.
 
 ## Вывод и артефакты
 
