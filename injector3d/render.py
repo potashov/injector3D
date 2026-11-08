@@ -23,6 +23,8 @@ import shutil
 import subprocess
 import tempfile
 
+import numpy as np
+
 from mathutils import Matrix, Vector
 from bpy_extras.object_utils import world_to_camera_view
 
@@ -39,6 +41,7 @@ from .config import (
     TILT_VARIANTS,
     tilt_ring_variants,
 )
+from . import bbox as bbox_info
 from . import timing
 from .liquid import contact_center_mm
 from .output_manager import (
@@ -212,6 +215,27 @@ def _submit_postprocess(worker, job, opts):
     worker.stdin.flush()
 
 
+def _bbox_from_png(path):
+    """Bbox готового PNG через Blender image API (без PIL)."""
+    try:
+        image = bpy.data.images.load(path, check_existing=False)
+    except RuntimeError:
+        return None
+    try:
+        width, height = image.size
+        if width <= 0 or height <= 0:
+            return None
+        pixels = np.empty(width * height * 4, dtype=np.float32)
+        image.pixels.foreach_get(pixels)
+        rgba = pixels.reshape((height, width, 4))[::-1]
+        raw, source = bbox_info.alpha_bbox(rgba)
+        if raw is None:
+            return None
+        return bbox_info.bbox_record(raw, (width, height), source=source)
+    finally:
+        bpy.data.images.remove(image)
+
+
 def _finish_postprocess_worker(worker, jobs):
     worker.stdin.close()
     code = worker.wait()
@@ -227,6 +251,13 @@ def _finish_postprocess_worker(worker, jobs):
                 center = result.get('ellipse_center_2d_px')
                 if center is not None:
                     job['metadata']['ellipse_center_2d_px'] = center
+                for key in (
+                        'bbox_raw_px', 'bbox_final_px', 'bbox_center_px',
+                        'bbox_width_px', 'bbox_height_px',
+                        'bbox_alpha_threshold', 'bbox_touches_border',
+                        'bbox_source'):
+                    if result.get(key) is not None:
+                        job['metadata'][key] = result[key]
                 process_ms = (result.get('timings_ms') or {}).get(
                     'postprocess')
                 if (process_ms is not None
@@ -318,14 +349,17 @@ def _render_one(scene, final_path, variant_name, metadata=None,
     active = meta['overlay']
     if any(active.get(k) for k in
            ('volume', 'azimuth', 'tilt_deg', 'ellipse_center',
-            'center_marker')):
-        print('  ! Постобработка выключена — подписи/маркер пропущены')
+            'center_marker', 'liquid', 'bbox')):
+        print('  ! Постобработка выключена — подписи/маркер/рамка пропущены')
     raw_center = meta.get('ellipse_center_2d_raw_px')
     if raw_center is not None:
         meta['ellipse_center_2d_px'] = list(raw_center)
     scene.render.filepath = final_path
     with timing.timed(timings, 'render'):
         bpy.ops.render.render(write_still=True)
+    bbox_data = _bbox_from_png(final_path)
+    if bbox_data is not None:
+        meta.update(bbox_data)
     print(f'  Рендер: {variant_name} -> {os.path.basename(final_path)}')
     return {'raw': None, 'final': final_path, 'metadata': meta}
 

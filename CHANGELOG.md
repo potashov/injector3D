@@ -2,6 +2,20 @@
 
 ## [Не выпущено]
 
+### Добавлено — bbox в metadata/manifest и overlay
+- `injector3d/bbox.py`: общий расчёт alpha-bbox и пересчёт raw → final
+  (`shift`, масштаб по высоте, обрезка, признак касания границы).
+- Manifest каждого кадра содержит `bbox_raw_px`, `bbox_final_px`,
+  `bbox_center_px`, `bbox_width_px`, `bbox_height_px`,
+  `bbox_alpha_threshold`, `bbox_touches_border`, `bbox_source`.
+  Bbox считается и при включённой, и при выключенной постобработке.
+- `config.SCENE_OVERLAY['bbox']` (по умолчанию `False`) и CLI
+  `--overlay-bbox/--no-overlay-bbox` (синонимы `--bbox/--no-bbox`):
+  в информационный блок выводятся координаты, центр и размеры bbox,
+  на кадр наносятся зелёная рамка 2 px и точка 3 px в центре.
+- `check_postprocess.py` проверяет raw/final bbox, пересчёт при
+  `shift`/`height` и отрисовку рамки/точки/строк overlay.
+
 ### Добавлено — тайминги по этапам, сериям и пакетам
 - `injector3d/timing.py`: `Timer`, `timed()`, статистика
   (`count/total/mean/median/p95/min/max`), агрегаты кадров, серий и

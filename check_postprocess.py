@@ -8,10 +8,12 @@ import tempfile
 
 from PIL import Image, ImageDraw
 
+from injector3d.bbox import bbox_record
 from postprocess_reference import (
     _alpha_bbox,
     _batch_namespace,
     _finalize_center,
+    _overlay_lines,
     _process,
 )
 
@@ -77,7 +79,15 @@ def main():
         assert result['ellipse_center_2d_px'] == [110.0, 100.0], result
         assert result['shift'] == 10
         assert result['timings_ms']['postprocess'] >= 0.0, result
-        print('  OK  RGBA, shift, result JSON с длительностью')
+        assert meta['bbox_raw_px'] == [60, 20, 140, 300], meta
+        assert meta['bbox_final_px'] == [70, 20, 150, 300], meta
+        assert meta['bbox_center_px'] == [110.0, 160.0], meta
+        assert meta['bbox_width_px'] == 81, meta
+        assert meta['bbox_height_px'] == 281, meta
+        assert meta['bbox_touches_border'] is False, meta
+        assert result['bbox_raw_px'] == [60, 20, 140, 300], result
+        assert result['bbox_final_px'] == [70, 20, 150, 300], result
+        print('  OK  RGBA, shift, bbox и result JSON с длительностью')
 
         final_height = 160
         final = os.path.join(tmp, 'rgb.png')
@@ -90,7 +100,11 @@ def main():
         assert out.size == (200, int(round(320 * scale))), out.size
         assert (out.getpixel((0, 0)) == (255, 255, 255)), out.getpixel((0, 0))
         assert abs(meta['ellipse_center_2d_px'][1] - 100.0 * scale) < 1e-9
-        print('  OK  fill, height/scale, белый фон')
+        expected = bbox_record((60, 20, 140, 300), (200, 320),
+                               scale=scale, shift=5, final_size=out.size)
+        for key, value in expected.items():
+            assert meta[key] == value, (key, meta[key], value)
+        print('  OK  fill, height/scale, bbox, белый фон')
 
         final = os.path.join(tmp, 'marker.png')
         meta = _meta()
@@ -102,6 +116,26 @@ def main():
         assert out.getpixel((int(round(cx)), int(round(cy)))) == (
             255, 0, 0, 255), out.getpixel((int(round(cx)), int(round(cy))))
         print('  OK  маркер в финальном 2D-центре')
+
+        final = os.path.join(tmp, 'bbox.png')
+        meta = _meta()
+        meta['overlay']['bbox'] = True
+        meta['overlay']['bbox_color'] = [0, 255, 0, 255]
+        meta['overlay']['bbox_line_width_px'] = 2
+        meta['overlay']['bbox_point_size_px'] = 3
+        _process(raw, final, _args(shift=10), meta)
+        out = Image.open(final).convert('RGBA')
+        x0, y0, x1, y1 = meta['bbox_final_px']
+        cx, cy = meta['bbox_center_px']
+        assert out.getpixel((x1, y1)) == (0, 255, 0, 255), (
+            out.getpixel((x1, y1)), meta['bbox_final_px'])
+        assert out.getpixel((int(round(cx)), int(round(cy)))) == (
+            0, 255, 0, 255), out.getpixel((int(round(cx)), int(round(cy))))
+        lines = _overlay_lines(meta)
+        assert any('bbox' in line for line in lines), lines
+        assert any('Cbbox' in line for line in lines), lines
+        assert any('WxH' in line for line in lines), lines
+        print('  OK  bbox: зелёная рамка, точка и строки overlay')
 
         job = {'final': 'x.png', 'raw': 'x_raw.png', 'result': 'r.json'}
         opts = {'shift_x_px': 7, 'target_height_px': 0,

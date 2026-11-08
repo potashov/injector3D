@@ -116,6 +116,8 @@ $BL --background --python gpu_info.py
   статистика, агрегаты кадров/серий/пакета. Пишутся в `timings` manifest
   серии, `timings_ms` кадра и `timings` `batch_manifest.json`;
   отключаются `--no-timing`.
+- `injector3d/bbox.py` — расчёт alpha-bbox по RGBA и пересчёт raw →
+  final для metadata/manifest (порог alpha, shift, масштаб, границы).
 - `injector3d/output_manager.py` — единый источник путей и имён вывода.
   Каталог прогона: `<база>/<YYYYMMDD_HHMM>/`, база — `--output-dir`
   (по умолчанию `config.OUTPUT_DIR`). Имена: `<жидкость>_<ракурс>[_<tag>]
@@ -178,13 +180,15 @@ $BL --background --python injector3d/create_scene.py -- --mode ring --tilt-count
 - `config.SCENE_POSTPROCESS`: `enabled`, `fill_background`, `fill_color`,
   `shift_x_px`, `target_height_px`, `compression`, `diagnostics`.
 - `config.SCENE_OVERLAY`: `volume`, `azimuth`, `tilt_deg`,
-  `ellipse_center`, `center_marker`, шрифт/цвета/размер.
+  `ellipse_center`, `center_marker`, `bbox`, шрифт/цвета/размер.
 - CLI: `--no-postprocess`, `--fill-background/--no-fill-background`,
   `--fill-color R,G,B[,A]`, `--overlay-volume/azimuth/tilt/ellipse/center`,
-  `--center-marker` и их `--no-*`-версии.
+  `--center-marker`, `--overlay-bbox` (синоним `--bbox`) и их
+  `--no-*`-версии. Bbox по умолчанию не рисуется.
 - `render.py` пишет `v<round(volume_mm3)>` в имя PNG, передаёт metadata
-  (3D-центр, raw 2D-центр) и рисует подписи/маркер через
-  `postprocess_reference.py`; при `enabled=False` PNG сохраняется сразу.
+  (3D-центр, raw 2D-центр, bbox) и рисует подписи/маркер/рамку через
+  `postprocess_reference.py`; при `enabled=False` PNG сохраняется сразу,
+  а bbox считается через Blender image API (`injector3d/bbox.py`).
 - `postprocess_reference.py --worker` — один процесс на серию; raw
   отправляется в stdin сразу после рендера, обработка идёт параллельно
   рендеру следующего кадра. В конце серии пишется
@@ -196,8 +200,10 @@ $BL --background --python injector3d/create_scene.py -- --mode ring --tilt-count
   проверено на калибровочной сетке, расхождение ≤ 1.2 px.
 - `postprocess_reference.py` пересчитывает `x+shift`, `y·scale` и рисует
   маркер/блок; fill по умолчанию выключен, RGBA сохраняется.
-- Manifest содержит raw- и финальный 2D-центр; `check_postprocess.py`
-  проверяет пересчёт и overlay. Композиторный путь без overlay отложен:
+- Manifest содержит raw/final bbox, его центр, ширину/высоту, порог alpha,
+  признак касания границы и raw- и финальный 2D-центр.
+  `check_postprocess.py` проверяет пересчёт и overlay. Композиторный путь
+  без overlay отложен:
   async-worker скрывает Python за рендером следующего кадра.
 
 ## Пункт 6 — CLI, пресеты жидкостей, камера, GLB и пакетный рендер — РЕАЛИЗОВАНО

@@ -252,6 +252,7 @@ SCENE_OVERLAY = {
     'tilt_deg': False,
     'ellipse_center': False,
     'center_marker': False,
+    'bbox': False,
     'font_path': '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',
     'font_size_px': 18,
     'margin_px': 12,
@@ -260,6 +261,9 @@ SCENE_OVERLAY = {
     'stroke_width_px': 1,
     'marker_color': (255, 0, 0, 255),
     'marker_size_px': 3,
+    'bbox_color': (0, 255, 0, 255),
+    'bbox_line_width_px': 2,
+    'bbox_point_size_px': 3,
 }
 ```
 
@@ -275,6 +279,7 @@ CLI:
 --overlay-ellipse / --no-overlay-ellipse
 --overlay-center / --no-overlay-center
 --center-marker / --no-center-marker
+--overlay-bbox / --no-overlay-bbox
 ```
 
 `--overlay-ellipse` и `--overlay-center` — синонимы: оба включают подпись
@@ -307,8 +312,11 @@ CLI:
 }
 ```
 
-`postprocess_reference.py` добавляет `ellipse_center_2d_px` в координатах
-итогового PNG; он же используется для подписи и маркера.
+`postprocess_reference.py` добавляет `ellipse_center_2d_px` и поля bbox
+(`bbox_raw_px`, `bbox_final_px`, `bbox_center_px`, `bbox_width_px`,
+`bbox_height_px`, `bbox_alpha_threshold`, `bbox_touches_border`) в
+координатах итогового PNG. Они же используются для подписи, маркера и
+рамки; при `--no-postprocess` bbox считает `render.py`.
 
 Имя файла:
 
@@ -375,7 +383,7 @@ tilted; для `render_tube()` — объём, возвращённый `on_tilt
 7. ✅ Дисторсия/сдвиг проверены на калибровочной сетке; эталонный кадр
    получает белый фон принудительно.
 8. ✅ Проверки fill on/off, alpha bbox, overlay, координат центра,
-   маркера и result JSON — `check_postprocess.py`.
+   маркера, bbox-полей, рамки/точки и result JSON — `check_postprocess.py`.
 
 ## 10. Решённые детали
 

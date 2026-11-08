@@ -198,7 +198,8 @@ $BL --background --python injector3d/create_scene.py -- --mode tube
 # Своя база вывода, глицерин, экспорт GLB, метки на кадре
 $BL --background --python injector3d/create_scene.py -- \
     --mode ring --tilt-count 4 --tilt-angle 30 --liquid-type glycerol \
-    --output-dir /mnt/datasets/injector --export-glb --overlay-liquid
+    --output-dir /mnt/datasets/injector --export-glb \
+    --overlay-liquid --overlay-bbox
 # → /mnt/datasets/injector/<YYYYMMDD_HHMM>/glycerol_*.png + glycerol_*.glb
 ```
 

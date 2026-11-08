@@ -14,6 +14,7 @@ import sys
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
+from injector3d.bbox import alpha_bbox, bbox_record
 from injector3d.timing import now_ms
 
 
@@ -31,17 +32,8 @@ def _parse_color(text):
 
 def _alpha_bbox(image):
     """Bbox непрозрачных пикселей; fallback — не-белая маска."""
-    data = np.asarray(image.convert('RGBA'))
-    alpha = data[..., 3]
-    mask = alpha > 0
-    if not mask.any():
-        rgb = data[..., :3]
-        mask = rgb.max(axis=2) < 240
-    ys = np.where(mask.any(axis=1))[0]
-    xs = np.where(mask.any(axis=0))[0]
-    if len(xs) == 0 or len(ys) == 0:
-        return None
-    return int(xs.min()), int(ys.min()), int(xs.max()), int(ys.max())
+    bbox, _ = alpha_bbox(np.asarray(image.convert('RGBA')))
+    return bbox
 
 
 _FONT_CACHE = {}
@@ -79,6 +71,19 @@ def _overlay_lines(meta):
             lines.append(f"C3D = ({c3[0]:.2f}, {c3[1]:.2f}, {c3[2]:.2f}) mm")
         if c2 is not None:
             lines.append(f"C2D = ({c2[0]:.1f}, {c2[1]:.1f}) px")
+    if overlay.get('bbox'):
+        box = meta.get('bbox_final_px')
+        center = meta.get('bbox_center_px')
+        if box is not None:
+            lines.append(
+                f"bbox = ({box[0]}, {box[1]}) - ({box[2]}, {box[3]}) px")
+        if center is not None:
+            lines.append(
+                f"Cbbox = ({center[0]:.1f}, {center[1]:.1f}) px")
+        w = meta.get('bbox_width_px')
+        h = meta.get('bbox_height_px')
+        if w is not None and h is not None:
+            lines.append(f"bbox WxH = {w} x {h} px")
     return lines
 
 
@@ -86,11 +91,24 @@ def _draw_overlay(image, meta):
     overlay = meta.get('overlay') or {}
     if not any(overlay.get(k) for k in
                ('volume', 'azimuth', 'tilt_deg', 'ellipse_center',
-                'center_marker', 'liquid')):
+                'center_marker', 'liquid', 'bbox')):
         return image
 
     out = image.convert('RGBA')
     draw = ImageDraw.Draw(out)
+
+    bbox = meta.get('bbox_final_px')
+    if overlay.get('bbox') and bbox is not None:
+        color = tuple(overlay.get('bbox_color', (0, 255, 0, 255)))
+        line_width = max(1, int(overlay.get('bbox_line_width_px', 2)))
+        draw.rectangle(bbox, outline=color, width=line_width)
+        center = meta.get('bbox_center_px')
+        if center is not None:
+            size = max(1, int(overlay.get('bbox_point_size_px', 3)))
+            half = max(0, size // 2)
+            x, y = int(round(center[0])), int(round(center[1]))
+            draw.ellipse([x - half, y - half, x + half, y + half],
+                         fill=color)
 
     marker = overlay.get('center_marker')
     c2 = meta.get('ellipse_center_2d_px')
@@ -141,7 +159,8 @@ def _process(raw_path, final_path, args, meta=None):
                 meta = json.load(fh)
 
     image = Image.open(raw_path).convert('RGBA')
-    bbox = _alpha_bbox(image)
+    raw_size = image.size
+    bbox, bbox_source = alpha_bbox(np.asarray(image))
     if bbox is None:
         raise RuntimeError(f'не найден объект в {raw_path}')
     raw_h = bbox[3] - bbox[1] + 1
@@ -163,6 +182,11 @@ def _process(raw_path, final_path, args, meta=None):
 
     shift = args.shift
     _finalize_center(meta, scale, shift)
+    bbox_data = bbox_record(bbox, raw_size, scale=scale, shift=shift,
+                            final_size=image.size, alpha_threshold=0,
+                            source=bbox_source)
+    if bbox_data is not None:
+        meta.update(bbox_data)
     if not fill:
         canvas_color = (0, 0, 0, 0)
         canvas_mode = 'RGBA'
@@ -200,11 +224,13 @@ def _process(raw_path, final_path, args, meta=None):
                 'postprocess': round(now_ms() - started, 3),
             },
         }
+        if bbox_data is not None:
+            result.update(bbox_data)
         with open(result_path, 'w', encoding='utf-8') as fh:
             json.dump(result, fh, ensure_ascii=False)
 
     if args.verbose:
-        result_bbox = _alpha_bbox(final)
+        result_bbox = meta.get('bbox_final_px') or _alpha_bbox(final)
         print(f'  raw tube height: {raw_h}px')
         print(f'  final bbox: {result_bbox}, bottom margin='
               f'{final.height - 1 - result_bbox[3]}px')

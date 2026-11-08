@@ -212,6 +212,7 @@ SCENE_OVERLAY = {
     'ellipse_center': False,
     'center_marker': False,
     'liquid': False,
+    'bbox': False,
     'font_path': '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',
     'font_size_px': 18,
     'margin_px': 12,
@@ -220,6 +221,9 @@ SCENE_OVERLAY = {
     'stroke_width_px': 1,
     'marker_color': (255, 0, 0, 255),
     'marker_size_px': 3,
+    'bbox_color': (0, 255, 0, 255),
+    'bbox_line_width_px': 2,
+    'bbox_point_size_px': 3,
 }
 
 # Камера на -Y смотрит в +Y (up = +Z), поэтому в кадре +X — вправо:

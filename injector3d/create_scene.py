@@ -106,6 +106,10 @@ def parse_render_options(tail):
             overlay['liquid'] = True
         elif arg == '--no-overlay-liquid':
             overlay['liquid'] = False
+        elif arg in ('--overlay-bbox', '--bbox'):
+            overlay['bbox'] = True
+        elif arg in ('--no-overlay-bbox', '--no-bbox'):
+            overlay['bbox'] = False
         i += 1
     return postprocess, overlay
 
