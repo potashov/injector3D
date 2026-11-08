@@ -1,269 +1,231 @@
 # injector3D
 
-Генерация 3D-сцен заполнения цилиндрической трубки прозрачной жидкостью под разными углами для Blender.
+Headless-генератор фотореалистичных синтетических сцен в Blender/Cycles:
+прозрачная цилиндрическая трубка с жидкостью, серия ракурсов для датасета
+компьютерного зрения (уровень и мениск жидкости, 2D/3D-центр контактной
+кромки, границы объекта).
 
-## Параметры трубки
+## Что делает
 
-| Параметр | Значение |
-|----------|----------|
-| Внутренний диаметр | 19.0 мм |
-| Высота | 92.0 мм |
-| Толщина стенки | 1 мм |
-| Толщина дна | 1 мм |
-| Материал | Прозрачный пластик (PMMA/акрил) |
+Основной результат — серия `N+1` кадров:
 
-## Жидкость
+- 1 вертикальный кадр;
+- `N` наклонов на фиксированный угол `θ` в разных плоскостях азимута `φ`;
+- обычно `N=4` или `N=8`, то есть 5 или 9 кадров.
 
-| Параметр | Значение |
-|----------|----------|
-| Заполнение | 50 % вместимости = 12900.56 мм³ |
-| Вместимость полости | 25801.12 мм³ |
-| Уровень на оси (вертикально) | 45.672 мм |
-| Уровень на оси (наклон 30°) | 39.470 мм |
-| Мениск (подъём у стенки) | 3.035 мм |
-| Точность подбора объёма | < 0.02 мм³ (бисекция, 48 итераций) |
-| Оттенок | слабая желтизна, по замеру RGB 73,73,58 |
-| Плотность поглощения | 20.0 (Cycles считает на метр, слой — 19 мм) |
+Геометрия по умолчанию: внутренний диаметр 19 мм, высота 92 мм, стенка
+1 мм, закрытое дно, открытый верх, PMMA/акрил. Доля заполнения по
+умолчанию `FILL_FRACTION = 0.5`; вместо неё можно задать объём
+`--volume-mm3`.
 
-## Рендер
+Отдельный сценарий `render_reference.py` повторяет референсный кадр
+`06120.png` камерой OV5693 (объектив 1.3 мм, barrel-дисторсия, roll +1.5°).
+Параметры камеры перенесены в основную серию.
 
-- Движок: Cycles, **GPU** (2× Quadro P1000, CUDA 12.4, драйвер 550.163.01)
-- Fallback: если CUDA-устройств нет, сцена автоматически рендерится на CPU
-- Эффекты: блики, прозрачность, каустики, поверхностное натяжение, мениск
-  (капли — пункт 8)
-- Камера: OV5693/1.3 мм, дистанция 46 мм, f/2.8, roll +1.5°,
-  `Distortion=+0.66`
-- Разрешение: 1200×1200; фон опционален (референс — белый, серия — RGBA)
-- Сэмплы: 128, адаптивная выборка (`adaptive_threshold = 0.01`), Light Tree
-- Денуазинг **выключен**: OpenImageDenoise размывает линию горизонта мениска
-  в 6 раз сильнее и стоит +56 % времени кадра (замер против эталона 512 spp)
-- Тайл трассировки: `tile_size = 2048` при `use_auto_tile = False` —
-  авторасчёт Blender на 2× P1000 медленнее на 3–7 % при той же картинке
-- Время кадра: **9.8 с** в среднем (диапазон 5.7–13.4 с по азимуту, GPU,
-  1200×1200, 128 сэмплов). Полная серия 4.5 при N=4 — ~53 с, из них 93 %
-  занимает Cycles. Замеры и разбор — `reports/performance.md`
-- Камера жёстко привязана к трубке во всех режимах — при наклонах трубка
-  в кадре не меняется, наклоняется только уровень жидкости. Разные кадры
-  серии 4.5 даёт тип поворота: наклон в плоскости азимута, а не вращение
-  связки вокруг Z. Свет всегда остаётся в мировых координатах, поэтому
-  блики зависят от ориентации трубки.
-- Мир: белый, `WORLD_STRENGTH = 0.30`. Он не виден в кадре
-  (`film_transparent=True`), но работает как сфера-отражатель: возвращает
-  к камере свет, прошедший сквозь жидкость. При тёмно-сером мире
-  возвращать было нечему, и жидкость выглядела серой. Сила 0.30 — пик
-  контраста «воздух/жидкость»; выше 0.60 начинается пересвет.
-  Подбор — `calib_world.py`.
+## Требования
 
-## Камера-референс 06120
+- Debian 13 (trixie);
+- локальная сборка Blender 5.2.3 LTS в
+  `./blender-5.2.3-linux-x64/blender` (папка в `.gitignore`);
+- системный `python3` с PIL/numpy для постобработки и launcher-скриптов;
+- окружение проверено 2026-11-08 на коммите `6d2f83f`: 2× Quadro P1000,
+  CUDA 12.4, драйвер 550.163.01;
+- при отсутствии CUDA используется CPU-fallback.
 
-Параметры камеры подобраны по `06120.png` и используются как основная
-камера основной серии; пункт 4.5 переводит её на N+1.
-Отдельный `render_reference.py` остаётся для одиночного кадра под
-референс: он дополнительно сдвигает трубку вправо на 105 px и
-растягивает кадр до высоты 1124 px.
+Не используйте системный `blender`: каноническая версия — локальная
+сборка. Модули `injector3d/*`, импортирующие `bpy`, запускаются только
+внутри Blender; проверки без `bpy` — системным `python3`.
+
+## Быстрый старт
 
 ```bash
 BL=./blender-5.2.3-linux-x64/blender
+$BL --version
 
-# Основная серия: 1200×1200, RGBA (заливка фона опциональна)
-$BL --background --python injector3d/create_scene.py -- --mode ring
-
-# Одиночный кадр под 06120 (сдвиг и масштаб под референс)
-$BL --background --python render_reference.py
-# → output/06120/06120_match_<YYYYMMDD_HHMMSS>.png
-```
-
-Параметры: OV5693 5MP 1/4″, объектив 1.3 мм, сенсор 3.6288×2.7216 мм,
-дистанция 46 мм, `Distortion=+0.66`, наклон камеры вниз 5 мм, roll +1.5°,
-f/2.8. Они лежат в `config.REFERENCE_CAMERA`, а `config.SCENE_CAMERA`
-ссылается на тот же словарь. Подробности и метрики —
-`reports/reference_camera_06120.md`.
-
-Постобработка (`postprocess_reference.py`) запускается системным
-`python3` и требует `PIL` и `numpy`. По умолчанию она сохраняет RGBA без
-заливки; `--fill` композитит фон цветом `--fill-color`, `--metadata`
-добавляет объём/азимут/угол, 3D- и 2D-центр и маркер. Основная серия
-использует тот же сдвиг +105 px, что и референс
-(`config.SCENE_POSTPROCESS`): камера привязана к трубке в обоих режимах,
-поэтому кадры наклонов не уходят за границу кадра. Вертикальный масштаб
-в серии отключён (`target_height_px=0`) — он привязан к высоте одиночной
-вертикальной трубки.
-
-## Пункт 4.5 — серия N+1 — ЗАВЕРШЁН
-
-Пункт 4.5 реализован. Запуск:
-
-```bash
+# Серия N+1: вертикаль + N азимутов наклона
 $BL --background --python injector3d/create_scene.py -- \
     --mode ring --tilt-count 8 --tilt-angle 10
-# → output/<YYYYMMDD_HHMM>/water_<ракурс>_a10_n8_v<объём>.png
 
-# То же, но двумя процессами Blender по одному GPU на каждый
-python3 render_parallel.py --tilt-count 8 --tilt-angle 10 --gpus 0,1
-
-# Пакетная матрица: жидкости × объёмы × углы, по одной серии на набор
-python3 render_batch.py --liquids water,glycerol \
-    --volumes 2000,5000 --tilt-angles 10,20 --gpus 0,1
-# → output/<batch>/<series>/ + batch_manifest.json
-```
-
-Плоскости наклона: старт с `TILT_AZIMUTH_START_DEG = 270°`, шаг `-360°/N`.
-При N=4: az270, az180, az090, az000. Имена файлов содержат `a<угол>_n<N>`.
-Трубка наклоняется на θ вокруг горизонтальной оси `(-sin φ, cos φ, 0)`
-через точку опоры `TILT_PIVOT_Z_MM` (`render.tilt_matrix`, это
-`Rz(φ)·Ry(θ)·Rz(φ)⁻¹`). Камера привязана к трубке на этапе вертикальной
-сцены и в цикле не трогается: вся система «трубка + камера» наклоняется
-целиком, а кадры различаются, потому что нормаль горизонта жидкости в
-системе трубки `R(φ)⁻¹·e_z` зависит от φ.
-Старый риг `AzimuthRig` давал поворот `Rz(φ)·Ry(θ)`, где φ сокращался, —
-все кадры серии были идентичны; риг удалён.
-Один наклонный меш жидкости на серию (строится при φ = 0 и поворачивается
-вокруг Z), upright — отдельный. Fast-путь через шаблон мениска ускоряет
-построение в 4.6–6.4 раза (замер; оптимистичная оценка «8–10×» из плана не
-подтвердилась — `reports/performance.md`).
-
-## Структура
-
-```
-injector3d/
-├── __init__.py       # Пакет
-├── config.py         # Все параметры (геометрия, сцена, рендер)
-├── tube_geometry.py  # Создание геометрии трубки (manifold-сетка)
-├── liquid.py         # Объём жидкости: мировой горизонт, мениск, бисекция
-├── meniscus.py       # Солвер Юнга-Лапласа (профиль мениска)
-├── materials.py      # Материалы: пластик PMMA, жидкость с поглощением
-├── scene.py          # Настройка сцены, камеры, освещения, CUDA-устройств
-├── render.py         # Рендер под разными углами
-├── timing.py         # Тайминги этапов, кадров, серий и пакетов
-├── output_manager.py # Каталог прогона и имена файлов вывода
-└── create_scene.py   # Entry-point
-render_reference.py   # Рендер кадра под референс 06120
-postprocess_reference.py  # Заливка (опц.), масштаб/сдвиг, подписи
-render_parallel.py    # Параллельный рендер серии по GPU + merge manifest
-render_batch.py       # Пакетный рендер матриц параметров
-summarize_timings.py  # Сводка таймингов: table/CSV/JSON/MD
-check_batch.py        # Проверки batch runner без Blender
-check_timing.py       # Проверки таймингов без Blender
-check_liquid.py       # Числовая самопроверка объёма и уровня
-check_liquid_presets.py   # Самопроверка физики пресетов жидкостей
-check_postprocess.py  # Проверки постобработки без Blender
-calib_world.py        # Подбор WORLD_STRENGTH по сетке прогонов
-check_cuda.py         # Диагностика доступности CUDA в сборке Blender
-gpu_info.py           # Список устройств рендера и их параметров
-output/<YYYYMMDD_HHMM>/ # Прогон: PNG, master .blend, manifest, GLB
-output/<batch>/<series>/ # Пакетный прогон + batch_manifest.json в корне
-output/1/ … output/4.5/ # Исторические прогоны старой схемы (в git)
-output/06120/         # Кадры под референс 06120
-reports/              # Отчёты по пунктам плана
-```
-
-## Соглашение о выводе
-
-Реализовано; номера пункта плана нет ни в путях, ни в именах файлов, ни
-в логах. Единый источник имён — `injector3d/output_manager.py`.
-
-| Артефакт | Имя |
-|----------|-----|
-| каталог прогона | `<база>/<YYYYMMDD_HHMM>/`, база — `--output-dir` или `config.OUTPUT_DIR` |
-| кадр | `<жидкость>_<ракурс>[_<tag>][_v<объём>].png` |
-| master серии | `<жидкость>_master[_<tag>][_s<k>of<M>].blend` |
-| `.blend` ракурса (tube) | `<жидкость>_<ракурс>[_<tag>].blend` |
-| manifest | `<жидкость>_manifest[_<tag>][_s<k>of<M>].json` |
-| лог шарда | `<жидкость>_shard<k>.log` |
-| GLB | `<жидкость>[_<tag>].glb` |
-
-Timestamp в имени каталога заменяет и timestamp файла, и номер пункта:
-каталог уже отличает прогон от прогона, а префикс-жидкость — серию
-внутри прогона. Стадии сцены упразднены — каждый прогон собирает полную
-сцену (жидкость + материалы), режим выбирается `--mode ring|tube`.
-
-## Запуск
-
-Каталог вывода и имена файлов не зависят от номера пункта плана: каждый
-прогон — свой каталог по timestamp, а внутри него кадры с типом жидкости
-в начале имени. Режим рендера задаётся явно (`--mode ring|tube`), сцена
-всегда полная (жидкость + материалы):
-
-```bash
-# Серия N+1 (вертикаль + N азимутов наклона) — режим по умолчанию
-$BL --background --python injector3d/create_scene.py -- \
-    --mode ring --tilt-count 8 --tilt-angle 10
-# → output/<YYYYMMDD_HHMM>/water_az270_a10_n8_v12901.png
-#   output/<YYYYMMDD_HHMM>/water_master_a10_n8.blend
-#   output/<YYYYMMDD_HHMM>/water_manifest_a10_n8.json
-
-# Пять фиксированных ракурсов
+# 5 фиксированных ракурсов
 $BL --background --python injector3d/create_scene.py -- --mode tube
 
-# Своя база вывода, глицерин, экспорт GLB, метки на кадре
-$BL --background --python injector3d/create_scene.py -- \
-    --mode ring --tilt-count 4 --tilt-angle 30 --liquid-type glycerol \
-    --output-dir /mnt/datasets/injector --export-glb \
-    --overlay-liquid --overlay-bbox
-# → /mnt/datasets/injector/<YYYYMMDD_HHMM>/glycerol_*.png + glycerol_*.glb
-```
+# Референсный кадр 06120
+$BL --background --python render_reference.py
 
-`--output-dir` — база: прогон всегда кладётся в `<база>/<timestamp>/`.
-Без него база — `config.OUTPUT_DIR` (`output/`). `--timestamp` фиксирует
-имя каталога (им именно синхронизируются шарды в `render_parallel.py`).
+# Параллельный рендер серии по GPU (системный python3)
+python3 render_parallel.py --tilt-count 8 --tilt-angle 10 --gpus 0,1
+
+# Пакетная матрица параметров
+python3 render_batch.py --liquids water,glycerol \
+    --volumes 2000,5000 --tilt-angles 10,20 --gpus 0,1
+```
 
 Полный набор флагов — `reports/step6_cli.md`; имена файлов формирует
 `injector3d/output_manager.py`.
 
-Тип жидкости выбирается `--liquid-type`, камера — `--camera-preset`:
+### Жидкость и камера
 
 ```bash
 $BL --background --python injector3d/create_scene.py -- \
-    --liquid-type glycerol --camera-preset reference --tilt-count 8 --tilt-angle 10
+    --liquid-type glycerol --camera-preset reference \
+    --tilt-count 8 --tilt-angle 10
 ```
 
-Числовая самопроверка жидкости (объём не зависит от угла, кромка
-горизонтальна, manifold на краевых случаях):
+Доступны жидкости `water`, `glycerol`, `ethanol`, `mineral_oil` и
+переопределения `--liquid-ior`, `--liquid-density`,
+`--surface-tension`, `--contact-angle`, `--absorption-density`.
+Камера: `--camera-preset reference|studio` и параметры дистанции, высоты,
+цели, объектива, roll и дисторсии.
+
+### Постобработка и bbox
+
+Постобработка включена по умолчанию. `--no-postprocess` сохраняет PNG
+сразу и не рисует overlay. Bbox считается по alpha-маске raw и
+пересчитывается в final-координаты; он всегда попадает в manifest кадра.
+Визуальный overlay bbox включается `--overlay-bbox` (синоним `--bbox`),
+по умолчанию выключен. Overlay не должен попадать в alpha-bbox.
+
+## Архитектура
+
+```mermaid
+flowchart TD
+    subgraph CLI["CLI / Launchers"]
+        CS["create_scene.py"]
+        RP["render_parallel.py"]
+        RB["render_batch.py"]
+        RR["render_reference.py"]
+    end
+
+    subgraph CORE["injector3d Core"]
+        CFG["config.py"]
+        SCN["scene.py"]
+        TG["tube_geometry.py"]
+        LIQ["liquid.py"]
+        MEN["meniscus.py"]
+        MM["meniscus_mixed.py"]
+        MAT["materials.py"]
+        RND["render.py"]
+        BBOX["bbox.py"]
+        TIM["timing.py"]
+        OM["output_manager.py"]
+    end
+
+    subgraph POST["Постобработка и вывод"]
+        PP["postprocess_reference.py --worker"]
+        OUT["output/YYYYMMDD_HHMM/ (PNG, manifest, blend, glb)"]
+    end
+
+    CHK["check_*.py / summarize_timings.py"]
+
+    RB -->|матрица серий| RP
+    RP -->|шарды / GPU| CS
+    RR --> RND
+
+    CS --> CFG
+    CS --> SCN
+    CS --> TG
+    CS --> LIQ
+    LIQ --> MEN
+    LIQ --> MM
+    CS --> MAT
+    CS --> RND
+
+    RND --> BBOX
+    RND --> PP
+    PP --> OUT
+    CS --> OM
+    RND --> OM
+
+    CFG -.-> TIM
+    CS -.-> TIM
+    RND -.-> TIM
+    CHK -.-> CFG
+    CHK -.-> LIQ
+    CHK -.-> RND
+```
+
+Поток выполнения: `create_scene.py` собирает сцену, строит трубку и
+жидкость, применяет материалы и вызывает `render.py`; `render.py`
+рендерит raw PNG, считает bbox и отправляет кадр в
+`postprocess_reference.py --worker`. `render_parallel.py` и
+`render_batch.py` — внешние launcher-скрипты: они запускают несколько
+процессов Blender и сливают manifest шардов/серий. Тайминги пишутся в
+manifest и не зависят от `bpy`. Причины ключевых решений — `docs/adr/`.
+
+## Выходные файлы
+
+Один прогон — один каталог:
+
+```text
+<база>/<YYYYMMDD_HHMM>/
+```
+
+`<база>` — `--output-dir`, по умолчанию `config.OUTPUT_DIR` (`output/`).
+`--timestamp` фиксирует имя каталога и синхронизирует шарды.
+
+Имена:
+
+```text
+<жидкость>_<ракурс>[_<tag>][_v<объём>].png
+<жидкость>_master[_<tag>][_s<k>of<M>].blend
+<жидкость>_manifest[_<tag>][_s<k>of<M>].json
+<жидкость>_shard<k>.log
+<жидкость>[_<tag>].glb
+```
+
+Для ring-режима `tag` обычно содержит `a<угол>_n<N>`. Пакетный прогон:
+
+```text
+<output-dir>/<batch>/<series>/
+<output-dir>/<batch>/batch_manifest.json
+<output-dir>/<batch>/logs/
+```
+
+PNG в `output/` — результат работы и отслеживается git; `.blend`,
+`.blend1`, `.json`, `.log`, `.glb` в `output/` игнорируются. Новые
+прогоны делайте в новый каталог, не перезаписывайте старые. `output/06120/`
+— отдельный результат под референс; `output/1/` … `output/4.5/` —
+исторические прогоны старой схемы.
+
+## Проверки
 
 ```bash
-blender --background --python check_liquid.py
+# Внутри Blender
+$BL --background --python check_liquid.py
+$BL --background --python check_liquid_presets.py
+$BL --background --python check_meniscus_mixed.py
 
-# Проверки постобработки, batch runner и таймингов (системный python3)
+# Без Blender
 python3 check_postprocess.py
 python3 check_batch.py
 python3 check_timing.py
+
+# Сводка таймингов
 python3 summarize_timings.py output/<прогон>/water_manifest.json
+python3 summarize_timings.py output/<batch>/batch_manifest.json --by liquid_type
+
+# Диагностика CUDA/GPU
+$BL --background --python check_cuda.py
+$BL --background --python check_build_cuda.py
+$BL --background --python gpu_info.py
 ```
 
-## Состояние
+Тестового фреймворка, линтера и typecheck нет. Проверка — успешные
+assert-прогоны и рендер без исключений.
 
-- ✅ Пункт 1 — геометрия трубки, студийная сцена, 5 пробных рендеров
-- ✅ Пункт 4 — материалы (пластик PMMA, жидкость с объёмным поглощением)
-- ✅ Пункт 2 — объём жидкости: горизонтальный срез + подбор уровня бисекцией
-- ✅ Пункт 3 — мениск (вертикаль и наклон), отчёт `reports/step3.md`
-- ✅ Пункт 4.5 — серия N+1 плоскостей наклона, кэш мениска, master `.blend`,
-  отчёт `reports/step4.5.md`, кадры `output/4.5/`
-- ✅ Референс 06120 — камера/дисторсия, отчёт
-  `reports/reference_camera_06120.md`, кадр `output/06120/`
-- 🔄 Пункт 5 — постобработка, опциональная заливка, подписи, `v<объём>`
-  в имени, 2D-центр, маркер, worker и manifest; проверки —
-  `check_postprocess.py`, отчёт — `reports/step5_postprocessing.md`
-- ✅ Основная серия переведена на камеру 06120: 1200×1200; фон
-  опционален, `output/4/` перерендерен
-- ✅ Основная серия смещена вправо на +105 px как референс; трубка
-  во всех 5 наклонах целиком в кадре
-- ✅ Жидкости задан желтоватый оттенок по замеру RGB 73,73,58
-- ✅ Мир сделан белым (`WORLD_STRENGTH = 0.30`) — он работает как
-  сфера-отражатель и подсветил жидкость изнутри; контраст
-  «воздух/жидкость» вырос на 67 %, яркость тела жидкости 145 против 137
-  на реальном фото
-- ⏳ Пункт 5 — детальная проработка кадров (каустики, блики, HDRI)
-- ✅ Пункт 6 — CLI: `--fill-fraction`/`--volume-mm3`, `--liquid-type` +
-  переопределения физики, `--camera-preset` + параметры ракурса,
-  `--export-glb`, `--gpu-index`, шарды, `render_parallel.py` и пакетный
-  `render_batch.py`; проверки — `check_batch.py`,
-  `reports/step6_cli.md`
-- ✅ Тайминги — этапы сцены/кадра/серии/пакета в manifest,
-  `summarize_timings.py`, `check_timing.py`;
-  отчёт — `reports/timing_instrumentation.md`
-- ⏳ Пункт 7 — финальные тестовые рендеры
-- ⏳ Пункт 8 — капли на внутренней стенке трубки
-- ⏳ Пункт 9 — пузырьки в жидкости в районе мениска
-- ✅ Пункт 10 — clipped-мениск со смешанным контактом интегрирован в
-  `build_liquid()`; проверки и серии N=8 —
-  `reports/meniscus_mixed_prototype.md`
+## Документация
+
+| Файл | Назначение |
+|---|---|
+| `AGENTS.md` | канонические правила для AI-агентов, команды и инварианты |
+| `PLAN.md` | только текущие и будущие работы; выполненное удаляется |
+| `CHANGELOG.md` | краткая история уже сделанных изменений |
+| `reports/README.md` | индекс актуальных отчётов |
+| `reports/` | подробные отчёты, замеры и обоснования |
+| `reports/archive/` | исторические планы, аудиты и снимки |
+| `docs/adr/` | ключевые архитектурные решения |
+| `injector3d/config.py` | источник фактических параметров |
+
+`reports/archive/plan_status_and_next_steps.md` — исторический аудит,
+а не источник текущего статуса. Текущие работы — `PLAN.md`; история —
+`CHANGELOG.md`.
