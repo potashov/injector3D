@@ -149,6 +149,29 @@ def main():
     finally:
         bpy.data.objects.remove(obj, do_unlink=True)
 
+    # 4c. Пустой цилиндр: V=0 — валидный сценарий, меш жидкости не нужен.
+    print("\n4c. Пустой цилиндр: V=0 без меша жидкости")
+    obj = create_liquid("CheckLiquid_Empty")
+    try:
+        for tilt in (0.0, 30.0):
+            mw = matrix_for(tilt_deg_y=tilt)
+            info = build_liquid(
+                obj, SimpleNamespace(matrix_world=mw), 0.0, use_fast=True)
+            good = (bool(info.get('empty'))
+                    and info['volume_mm3'] == 0.0
+                    and info['verts'] == 0
+                    and info['faces'] == 0
+                    and info['level_mm'] is None
+                    and len(obj.data.vertices) == 0)
+            ok &= good
+            print(f"  {'OK ' if good else 'FAIL'} θ={tilt:4.1f}°: "
+                  f"empty={info.get('empty')}, "
+                  f"V={info['volume_mm3']:.2f}, "
+                  f"verts={info['verts']}, "
+                  f"method={info.get('method')}")
+    finally:
+        bpy.data.objects.remove(obj, do_unlink=True)
+
     # 5. Порог перелива: выше нижней точки кромки объём не растёт
     print("\n5. Перелив через край")
     mw = matrix_for(tilt_deg_y=30.0)

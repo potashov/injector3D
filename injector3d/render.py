@@ -432,7 +432,7 @@ def _frame_metadata(volume_mm3, azimuth_deg, tilt_deg, center_mm, scene,
 
 
 def _center_for_info(tube, info):
-    if not info or info.get('level_mm') is None:
+    if not info or info.get('empty') or info.get('level_mm') is None:
         return None
     return contact_center_mm(tube.matrix_world, info['level_mm'],
                              flat=info.get('flat', False),
@@ -654,9 +654,12 @@ def render_ring(tube, liquid_upright, liquid_tilted,
 
     theta_rad = math.radians(angle)
     tube.matrix_world = Matrix.Identity(4)
-    liquid_tilted.rotation_euler = (0.0, 0.0, 0.0)
-    liquid_upright.hide_render = False
-    liquid_tilted.hide_render = True
+    if liquid_tilted is not None:
+        liquid_tilted.rotation_euler = (0.0, 0.0, 0.0)
+    if liquid_upright is not None:
+        liquid_upright.hide_render = False
+    if liquid_tilted is not None:
+        liquid_tilted.hide_render = True
     bpy.context.view_layer.update()
 
     liq = liquid_type or DEFAULT_LIQUID_TYPE
@@ -677,17 +680,22 @@ def render_ring(tube, liquid_upright, liquid_tilted,
                 with timing.timed(frame_ms, 'tilt_apply'):
                     if azimuth_deg is None:
                         tube.matrix_world = Matrix.Identity(4)
-                        liquid_upright.hide_render = False
-                        liquid_tilted.hide_render = True
+                        if liquid_upright is not None:
+                            liquid_upright.hide_render = False
+                        if liquid_tilted is not None:
+                            liquid_tilted.hide_render = True
                         info = info_upright
                         tilt_deg = 0.0
                     else:
                         tube.matrix_world = tilt_matrix(
                             theta_rad, azimuth_deg)
-                        liquid_tilted.rotation_euler = (
-                            0.0, 0.0, math.radians(azimuth_deg))
-                        liquid_upright.hide_render = True
-                        liquid_tilted.hide_render = False
+                        if liquid_tilted is not None:
+                            liquid_tilted.rotation_euler = (
+                                0.0, 0.0, math.radians(azimuth_deg))
+                        if liquid_upright is not None:
+                            liquid_upright.hide_render = True
+                        if liquid_tilted is not None:
+                            liquid_tilted.hide_render = False
                         info = info_tilted
                         tilt_deg = angle
                     bpy.context.view_layer.update()
@@ -725,7 +733,10 @@ def render_ring(tube, liquid_upright, liquid_tilted,
 
     # Оставляем сцену в вертикальном положении для сохранения/отладки.
     tube.matrix_world = Matrix.Identity(4)
-    liquid_tilted.rotation_euler = (0.0, 0.0, 0.0)
-    liquid_upright.hide_render = False
-    liquid_tilted.hide_render = True
+    if liquid_tilted is not None:
+        liquid_tilted.rotation_euler = (0.0, 0.0, 0.0)
+    if liquid_upright is not None:
+        liquid_upright.hide_render = False
+    if liquid_tilted is not None:
+        liquid_tilted.hide_render = True
     bpy.context.view_layer.update()

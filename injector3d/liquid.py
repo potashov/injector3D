@@ -531,6 +531,24 @@ def create_liquid(name="Liquid"):
     return obj
 
 
+def _empty_liquid_info(liq_name, liquid_config):
+    """Информация о пустом цилиндре: меша жидкости нет по определению."""
+    return {
+        'level_mm': None,
+        'volume_mm3': 0.0,
+        'error_mm3': 0.0,
+        'spilled': False,
+        'flat': False,
+        'mixed': False,
+        'empty': True,
+        'method': 'empty',
+        'verts': 0,
+        'faces': 0,
+        'liquid_type': liq_name,
+        'liquid_config': liquid_config,
+    }
+
+
 def build_liquid(obj, tube, target_mm3, segments=REVOLVE_SEGMENTS,
                  use_fast=True, liquid_config=None, use_mixed=True):
     """Перестраивает меш жидкости под текущую ориентацию трубки.
@@ -550,13 +568,26 @@ def build_liquid(obj, tube, target_mm3, segments=REVOLVE_SEGMENTS,
     у дна или перелив).  `use_mixed=False` принудительно оставляет старый
     путь — это полезно для сравнения.
 
+    Для `target_mm3 <= 0` меш не строится: возвращается пустой объект и
+    `empty=True`.  Если меш не удалось построить для положительного
+    объёма, это также отражается в `empty=True`, но без исключения.
+
     Returns
     -------
     dict с полями level_mm, volume_mm3, error_mm3, spilled, flat, mixed,
-    verts, faces, liquid_type, liquid_config.
+    empty, method, verts, faces, liquid_type, liquid_config.
     """
     props = _normalize_liquid_props(liquid_config)
     mw = tube.matrix_world.copy()
+    liq_name = (liquid_config.get('name', 'water')
+                if isinstance(liquid_config, dict) else 'water')
+
+    if target_mm3 <= 0.0:
+        me = obj.data
+        me.clear_geometry()
+        me.update()
+        obj.matrix_world = Matrix.Identity(4)
+        return _empty_liquid_info(liq_name, liquid_config)
 
     if use_mixed:
         mixed = build_mixed_liquid(
@@ -578,17 +609,16 @@ def build_liquid(obj, tube, target_mm3, segments=REVOLVE_SEGMENTS,
                 bm.free()
             me.update()
             obj.matrix_world = Matrix.Identity(4)
-
-            liq_name = (liquid_config.get('name', 'water')
-                        if isinstance(liquid_config, dict) else 'water')
+            empty = len(me.vertices) == 0
             return {
-                'level_mm': level,
+                'level_mm': level if not empty else None,
                 'volume_mm3': vol,
                 'error_mm3': vol - target_mm3,
                 'spilled': spilled,
                 'flat': flat,
                 'mixed': True,
-                'method': 'clipped',
+                'empty': empty,
+                'method': 'clipped' if not empty else 'empty',
                 'contact_mm': mixed['contact_mm'],
                 'bottom_max_mm': mixed['bottom_max_mm'],
                 'bottom_min_mm': mixed['bottom_min_mm'],
@@ -631,18 +661,18 @@ def build_liquid(obj, tube, target_mm3, segments=REVOLVE_SEGMENTS,
         bm.free()
     me.update()
     obj.matrix_world = Matrix.Identity(4)
-
-    liq_name = (liquid_config.get('name', 'water')
-                if isinstance(liquid_config, dict) else 'water')
+    empty = len(me.vertices) == 0
 
     return {
-        'level_mm': level,
+        'level_mm': level if not empty else None,
         'volume_mm3': vol,
         'error_mm3': vol - target_mm3,
         'spilled': spilled,
         'flat': flat,
         'mixed': False,
-        'method': 'flat' if flat else 'meniscus',
+        'empty': empty,
+        'method': ('empty' if empty
+                   else ('flat' if flat else 'meniscus')),
         'verts': len(me.vertices),
         'faces': len(me.polygons),
         'liquid_type': liq_name,

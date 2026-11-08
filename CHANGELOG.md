@@ -11,6 +11,12 @@
 
 ### Добавлено
 
+- **Рендер пустого цилиндра (V=0).** `--volume-mm3 0` и
+  `--fill-fraction 0` разрешены: меш жидкости и мениск не строятся,
+  проверки объёма пропускаются, но PNG, manifest и GLB без жидкости
+  создаются штатно. То же поведение — при недоступном меше для
+  положительного объёма, без исключения. Проверки — `check_liquid.py`,
+  `check_batch.py`; CLI — `reports/step6_cli.md`.
 - **bbox в metadata/manifest и overlay.** `injector3d/bbox.py` считает
   alpha-bbox и пересчитывает raw → final; manifest кадра содержит
   `bbox_raw_px`, `bbox_final_px`, `bbox_center_px`, `bbox_width_px`,

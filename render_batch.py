@@ -129,14 +129,14 @@ def _normalize_config(raw):
     if volumes_raw is not None:
         volumes = [_as_number(v, 'volumes_mm3')
                    for v in _as_list(volumes_raw, 'volumes_mm3')]
-        if any(v <= 0.0 for v in volumes):
-            raise SystemExit('volumes_mm3: объёмы должны быть больше 0')
+        if any(v < 0.0 for v in volumes):
+            raise SystemExit('volumes_mm3: объёмы не могут быть отрицательными')
         fills = None
     elif fills_raw is not None:
         fills = [_as_number(v, 'fill_fractions')
                  for v in _as_list(fills_raw, 'fill_fractions')]
-        if any(not (0.0 < v <= 1.0) for v in fills):
-            raise SystemExit('fill_fractions: нужны значения в (0, 1]')
+        if any(not (0.0 <= v <= 1.0) for v in fills):
+            raise SystemExit('fill_fractions: нужны значения в [0, 1]')
         volumes = None
     else:
         volumes = None

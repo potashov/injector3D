@@ -52,6 +52,25 @@ def main():
     assert tube[0]['tilt_count'] is None
     print('  OK  tube-режим: доли заполнения, 5 кадров, камера studio')
 
+    empty = rb.build_series(rb._normalize_config({
+        'volumes_mm3': [0],
+        'tilt_angles': [10],
+        'tilt_counts': [1],
+        'liquids': ['water'],
+        'camera_presets': ['reference'],
+    }))
+    assert len(empty) == 1 and empty[0]['id'] == 'water_v0_a10_n1_c_reference'
+    assert empty[0]['volume_mm3'] == 0.0
+    empty_fill = rb.build_series(rb._normalize_config({
+        'mode': 'tube',
+        'fill_fractions': [0.0],
+        'liquids': ['water'],
+        'camera_presets': ['studio'],
+    }))
+    assert empty_fill[0]['id'] == 'water_f0_tube_c_studio'
+    assert empty_fill[0]['fill_fraction'] == 0.0
+    print('  OK  пустой цилиндр: volumes_mm3/fill_fractions = 0 допустимы')
+
     _expect_exit(
         lambda: rb.build_series(rb._normalize_config({
             'volumes_mm3': [2000, 2000],

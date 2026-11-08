@@ -189,6 +189,12 @@ def validate_tube(tube):
     return True
 
 
+def _liquid_mesh_available(obj, info):
+    """Есть ли реальный меш жидкости для рендера/проверки/GLB."""
+    return bool(obj and obj.data and len(obj.data.vertices) > 0
+                and info and not info.get('empty'))
+
+
 def validate_liquid(liquid, target_mm3, info):
     """Валидация объёма жидкости: manifold, объём, положение поверхности.
 
@@ -197,7 +203,14 @@ def validate_liquid(liquid, target_mm3, info):
     плоской и полной поверхности верхняя кромка горизонтальна; у
     смешанной верхний контур не горизонтален (сухая часть дна может быть
     выше кромки), поэтому там проверяется положение линии контакта.
+
+    Пустой цилиндр (`target_mm3 <= 0`) и недоступный меш — допустимое
+    состояние: проверка пропускается без исключения.
     """
+    if not _liquid_mesh_available(liquid, info):
+        print("  Жидкость: меша нет — проверка пропущена")
+        return True
+
     me = liquid.data
     assert len(me.vertices) > 0, "Жидкость: пустой меш"
     assert len(me.polygons) > 0, "Жидкость: нет полигонов"
@@ -539,8 +552,8 @@ def main():
         )
     capacity = capacity_mm3()
     if volume_mm3 is not None:
-        if volume_mm3 <= 0.0:
-            raise SystemExit('Ошибка: --volume-mm3 должен быть больше 0')
+        if volume_mm3 < 0.0:
+            raise SystemExit('Ошибка: --volume-mm3 не может быть отрицательным')
         if volume_mm3 > capacity + 1e-9:
             raise SystemExit(
                 f'Ошибка: объём {volume_mm3:.2f} мм³ больше вместимости '
@@ -551,8 +564,8 @@ def main():
     else:
         if fill_fraction is None:
             fill_fraction = cfg.FILL_FRACTION
-        if not (0.0 < fill_fraction <= 1.0):
-            raise ValueError('fill-fraction должен быть в диапазоне (0, 1]')
+        if not (0.0 <= fill_fraction <= 1.0):
+            raise ValueError('fill-fraction должен быть в диапазоне [0, 1]')
         target_mm3 = target_volume_mm3(fill_fraction)
     if shard_count < 1 or not (0 <= shard_index < shard_count):
         raise ValueError('нужно 0 <= shard-index < shard-count')
@@ -601,8 +614,12 @@ def main():
     on_tilt = None
     liquid_upright = None
     liquid_tilted = None
-    print(f"   Вместимость полости: {capacity:.2f} мм³, "
-          f"цель {fill_fraction * 100:.0f}% = {target_mm3:.2f} мм³")
+    if target_mm3 <= 0.0:
+        print(f"   Вместимость полости: {capacity:.2f} мм³, "
+              f"пустой цилиндр (V=0)")
+    else:
+        print(f"   Вместимость полости: {capacity:.2f} мм³, "
+              f"цель {fill_fraction * 100:.0f}% = {target_mm3:.2f} мм³")
 
     with timer.measure('materials'):
         mat_plastic = create_material_plastic("Plastic")
@@ -636,8 +653,9 @@ def main():
         with timer.measure('liquid_upright'):
             info_up = build_liquid(liquid, tube, target_mm3, use_fast=True,
                                    liquid_config=liquid_config)
-            liquid_upright = _dup_mesh_object(liquid)
-            liquid_upright.name = "Liquid_upright"
+            if _liquid_mesh_available(liquid, info_up):
+                liquid_upright = _dup_mesh_object(liquid)
+                liquid_upright.name = "Liquid_upright"
 
         # 2) наклонный меш при φ = 0: наклон θ вокруг точки опоры
         tube.matrix_world = tilt_matrix(math.radians(angle), 0.0)
@@ -645,8 +663,9 @@ def main():
         with timer.measure('liquid_tilted'):
             info_t = build_liquid(liquid, tube, target_mm3, use_fast=True,
                                   liquid_config=liquid_config)
-            liquid_tilted = _dup_mesh_object(liquid)
-            liquid_tilted.name = "Liquid_tilted"
+            if _liquid_mesh_available(liquid, info_t):
+                liquid_tilted = _dup_mesh_object(liquid)
+                liquid_tilted.name = "Liquid_tilted"
 
         # 3) Трубка обратно вертикально. Камера остаётся дочерней:
         #    в рендере меняем только tube.matrix_world.
@@ -657,19 +676,39 @@ def main():
         liquid.hide_render = True
         liquid.hide_viewport = True
 
-        print(f"   ✅ Upright: уровень {info_up['level_mm']:.3f} мм, "
-              f"V={info_up['volume_mm3']:.2f} мм³")
-        print(f"   ✅ Tilted: уровень {info_t['level_mm']:.3f} мм, "
-              f"V={info_t['volume_mm3']:.2f} мм³")
+        if _liquid_mesh_available(liquid, info_up):
+            print(f"   ✅ Upright: уровень {info_up['level_mm']:.3f} мм, "
+                  f"V={info_up['volume_mm3']:.2f} мм³")
+            print(f"   ✅ Tilted: уровень {info_t['level_mm']:.3f} мм, "
+                  f"V={info_t['volume_mm3']:.2f} мм³")
+        elif target_mm3 <= 0.0:
+            print("   ✅ Upright/Tilted: пустой цилиндр — меш жидкости "
+                  "не создаётся")
+        else:
+            print("   ⚠  Upright/Tilted: меш жидкости не создан — рендер "
+                  "пойдёт без жидкости")
         with timer.measure('validate_liquid'):
-            validate_liquid(liquid_upright, target_mm3, info_up)
-            validate_liquid(liquid_tilted, target_mm3, info_t)
-        print("   ✅ Жидкость: 2 меша (upright + наклонённый)\n")
+            if _liquid_mesh_available(liquid, info_up):
+                validate_liquid(liquid_upright, target_mm3, info_up)
+            if _liquid_mesh_available(liquid, info_t):
+                validate_liquid(liquid_tilted, target_mm3, info_t)
+        if liquid_upright is not None and liquid_tilted is not None:
+            print("   ✅ Жидкость: 2 меша (upright + наклонённый)\n")
+        else:
+            print("   ✅ Жидкость: меша нет, сцена рендерится пустой\n")
     else:
         # Обычный рендер: перестраиваем жидкость на каждый наклон
         def on_tilt(variant_name, tilt_euler):
             info = build_liquid(liquid, tube, target_mm3,
                                 liquid_config=liquid_config)
+            if not _liquid_mesh_available(liquid, info):
+                if target_mm3 <= 0.0:
+                    print(f"     {variant_name:<9} наклон {tilt_euler} -> "
+                          f"пустой цилиндр (V=0)")
+                else:
+                    print(f"     {variant_name:<9} наклон {tilt_euler} -> "
+                          f"меш жидкости не создан")
+                return info
             flag = "  ⚠ переливается" if info['spilled'] else ""
             print(f"     {variant_name:<9} наклон {tilt_euler} -> "
                   f"уровень {info['level_mm']:7.3f} мм, "
@@ -679,16 +718,23 @@ def main():
 
         with timer.measure('liquid_initial'):
             info = on_tilt('upright', (0.0, 0.0, 0.0))
-        if info['spilled']:
-            print(f"   ⚠  Заполнение {fill_fraction * 100:.0f}% переливается "
-                  f"через край: максимум {info['volume_mm3']:.2f} мм³")
-        print(f"   ✅ Жидкость: уровень {info['level_mm']:.3f} мм, "
-              f"объём {info['volume_mm3']:.2f} мм³")
+        if _liquid_mesh_available(liquid, info):
+            if info['spilled']:
+                print(f"   ⚠  Заполнение {fill_fraction * 100:.0f}% "
+                      f"переливается через край: максимум "
+                      f"{info['volume_mm3']:.2f} мм³")
+            print(f"   ✅ Жидкость: уровень {info['level_mm']:.3f} мм, "
+                  f"объём {info['volume_mm3']:.2f} мм³")
+        elif target_mm3 <= 0.0:
+            print("   ✅ Жидкость: пустой цилиндр — меш не создаётся")
+        else:
+            print("   ⚠  Жидкость: меш не создан — рендер пойдёт без неё")
         print(f"   ✅ Жидкость: {liquid.data.materials[0].name} "
               f"(IOR={liquid_config['ior']}, "
               f"absorption density={liquid_config['absorption_density']})")
         with timer.measure('validate_liquid'):
-            validate_liquid(liquid, target_mm3, info)
+            if _liquid_mesh_available(liquid, info):
+                validate_liquid(liquid, target_mm3, info)
     print("   ✅ Готово.\n")
 
     # 5. Экспорт GLB (если запрошен) — в каталог прогона
@@ -699,9 +745,9 @@ def main():
                 run_dir, om.glb_filename(liquid_type, tag))
         objs_to_export = [tube]
         if is_ring:
-            if liquid_upright:
+            if _liquid_mesh_available(liquid_upright, info_up):
                 objs_to_export.append(liquid_upright)
-        elif liquid:
+        elif _liquid_mesh_available(liquid, info):
             objs_to_export.append(liquid)
         with timer.measure('export_glb'):
             export_scene_glb(export_glb_path, objects=objs_to_export)
