@@ -11,6 +11,7 @@ PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, PROJECT_DIR)
 
 import render_batch as rb
+from injector3d import config as cfg
 
 
 def _expect_exit(func, fragment):
@@ -51,6 +52,46 @@ def main():
     assert tube[0]['expected_frames'] == 5
     assert tube[0]['tilt_count'] is None
     print('  OK  tube-режим: доли заполнения, 5 кадров, камера studio')
+
+    assert cfg.tilt_ring_variants(0) == (('upright', None),)
+    assert len(cfg.tilt_ring_variants(1, 10)) == 2
+    try:
+        cfg.tilt_ring_variants(-1)
+    except ValueError as exc:
+        assert '>= 0' in str(exc), exc
+    else:
+        raise AssertionError('отрицательный N принят')
+    print('  OK  N=0: только вертикальный кадр, N=1: вертикаль + наклон')
+
+    upright = rb.build_series(rb._normalize_config({
+        'mode': 'upright',
+        'volumes_mm3': [2000],
+        'liquids': ['water'],
+        'camera_presets': ['reference'],
+    }))
+    assert len(upright) == 1, upright
+    assert upright[0]['id'] == 'water_v2000_upright_c_reference'
+    assert upright[0]['expected_frames'] == 1
+    assert upright[0]['tilt_count'] == 0
+    cmd = rb._series_command(
+        upright[0], '/tmp/batch', blender='/opt/blender')
+    cmd_text = ' '.join(cmd)
+    assert '--mode upright' in cmd_text
+    assert '--tilt-count' not in cmd_text
+    print('  OK  upright-режим: один кадр, без --tilt-count')
+    ring0 = rb.build_series(rb._normalize_config({
+        'volumes_mm3': [2000],
+        'tilt_counts': [0],
+        'liquids': ['water'],
+        'camera_presets': ['reference'],
+    }))
+    assert ring0[0]['id'] == 'water_v2000_a10_n0_c_reference'
+    assert ring0[0]['expected_frames'] == 1
+    cmd0 = rb._series_command(
+        ring0[0], '/tmp/batch', gpus='0,1', shards=2,
+        blender='/opt/blender')
+    assert '--shards 1' in ' '.join(cmd0)
+    print('  OK  ring N=0: один вертикальный кадр, один шард')
 
     empty = rb.build_series(rb._normalize_config({
         'volumes_mm3': [0],

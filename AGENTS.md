@@ -69,6 +69,9 @@ $BL --version
 $BL --background --python injector3d/create_scene.py -- \
     --mode ring --tilt-count 8 --tilt-angle 10
 
+# Только вертикальный кадр (N=0; --mode upright — алиас)
+$BL --background --python injector3d/create_scene.py -- --tilt-count 0
+
 # Референсный кадр 06120
 $BL --background --python render_reference.py
 

@@ -134,8 +134,10 @@ def _merge_manifests(run_dir, ts, shards, keep):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--mode', default='ring', choices=('ring', 'tube'),
-                        help='режим рендера (по умолчанию ring — серия N+1)')
+    parser.add_argument('--mode', default='ring',
+                        choices=('ring', 'tube', 'upright'),
+                        help='режим рендера (по умолчанию ring — серия N+1; '
+                             'upright — один вертикальный кадр)')
     parser.add_argument('--output-dir', default=os.path.join(PROJECT_DIR, 'output'),
                         help='база вывода; прогон ляжет в <output-dir>/<timestamp>')
     parser.add_argument('--gpus', default=None,
@@ -147,6 +149,7 @@ def main():
     parser.add_argument('--keep-shards', action='store_true',
                         help='не удалять manifest шардов после слияния')
     args, forwarded = parser.parse_known_args()
+    tilt_count = _value_after(forwarded, '--tilt-count')
 
     gpus = ([int(x) for x in args.gpus.split(',')]
             if args.gpus else _detect_gpus())
@@ -160,6 +163,15 @@ def main():
     # кадров всего пять и они не переставляются — один процесс.
     if args.mode == 'tube' and shards != 1:
         raise SystemExit('--mode tube рендерит один набор кадров: '
+                         '--shards должен быть 1')
+    single_frame = args.mode == 'upright'
+    if tilt_count is not None:
+        try:
+            single_frame = single_frame or int(tilt_count) == 0
+        except ValueError:
+            pass
+    if single_frame and shards != 1:
+        raise SystemExit('--mode upright/--tilt-count 0 рендерит один кадр: '
                          '--shards должен быть 1')
 
     # Timestamp читаем ДО _strip_options: он приходит в forwarded и будет

@@ -289,10 +289,15 @@ def tilt_ring_variants(n=None, angle=None):
 
     Возвращает кортеж `(имя, азимут_град | None)`. У вертикали азимут
     `None`; у наклонных кадров имя `azNNN` (азимут по модулю 360°).
+
+    `N=0` — вырожденная серия: только вертикальный кадр. Угол наклона в
+    этом случае не используется и может быть любым.
     """
     n = TILT_AZIMUTH_COUNT if n is None else int(n)
-    if n < 1:
-        raise ValueError("TILT_AZIMUTH_COUNT должен быть >= 1")
+    if n < 0:
+        raise ValueError("TILT_AZIMUTH_COUNT должен быть >= 0")
+    if n == 0:
+        return (("upright", None),)
     if angle is not None and not (0.0 < float(angle) < 90.0):
         raise ValueError("угол наклона должен быть в диапазоне (0, 90)")
 

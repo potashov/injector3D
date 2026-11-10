@@ -609,6 +609,9 @@ def render_ring(tube, liquid_upright, liquid_tilted,
                 tag=None, liquid_type=None, timer=None):
     """Рендер N+1 кадров: вертикаль + N плоскостей наклона при угле `angle`.
 
+    При `n=0` рендерится только вертикальный кадр; `liquid_tilted` и
+    `info_tilted` могут быть `None`.
+
     Камера — дочерняя трубке (привязка сделана в `create_scene` на этапе
     вертикальной сцены) и в цикле не трогается вовсе: меняя единственный
     `tube.matrix_world`, мы перемещаем и наклоняем всю систему «трубка +
@@ -644,7 +647,7 @@ def render_ring(tube, liquid_upright, liquid_tilted,
                 tilted += 1
         shard_suffix = f'_s{shard_index}of{shard_count}'
 
-    geometric_tag = f'a{angle:g}_n{n}'
+    geometric_tag = 'n0' if n == 0 else f'a{angle:g}_n{n}'
     tag = f'{geometric_tag}_{tag}' if tag else geometric_tag
     base = ensure_dir(output_dir
                       or render_dir(OUTPUT_DIR, new_timestamp()))

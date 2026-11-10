@@ -11,8 +11,9 @@ injector3d — entry-point сборки сцены и рендера.
   - валидация (габариты, замкнутость, объём)
 
 Сцена всегда полная: жидкость и материалы подключаются в каждом прогоне.
-Режим рендера выбирается явно (`--mode ring|tube`), каталог вывода —
-`--output-dir` (по умолчанию `config.OUTPUT_DIR/<YYYYMMDD_HHMM>`).
+Режим рендера выбирается явно (`--mode ring|tube|upright`), каталог
+вывода — `--output-dir` (по умолчанию
+`config.OUTPUT_DIR/<YYYYMMDD_HHMM>`).
 """
 
 import sys
@@ -52,7 +53,7 @@ from injector3d.config import (
     get_camera_config,
 )
 
-RENDER_MODES = ('ring', 'tube')
+RENDER_MODES = ('ring', 'tube', 'upright')
 
 
 def _parse_color(text):
@@ -586,9 +587,19 @@ def main():
 
     # Сцена всегда полная: жидкость и материалы собираются в каждом
     # прогоне. Режим выбирается явно — раньше его задавал номер пункта.
-    is_ring = mode == 'ring'
-    n = n_tilt if n_tilt is not None else cfg.TILT_AZIMUTH_COUNT
+    # `upright` — алиас вырожденной ring-серии: только вертикальный кадр.
+    is_upright = mode == 'upright'
+    if is_upright and n_tilt not in (None, 0):
+        raise SystemExit(
+            'Ошибка: --mode upright несовместим с --tilt-count, '
+            'отличным от 0')
+    is_ring = mode in ('ring', 'upright')
+    n = 0 if is_upright else (
+        n_tilt if n_tilt is not None else cfg.TILT_AZIMUTH_COUNT)
     angle = angle_tilt if angle_tilt is not None else cfg.TILT_ANGLE_DEG
+    if is_ring and n == 0 and shard_count > 1:
+        raise SystemExit(
+            'Ошибка: N=0 рендерит один кадр; --shard-count должен быть 1')
 
     # Каталог прогона считается здесь один раз, чтобы кадры, master
     # `.blend`, manifest и GLB легли в него же (а не в разные папки).
@@ -597,8 +608,13 @@ def main():
     run_dir = om.render_dir(output_dir or cfg.OUTPUT_DIR, ts)
     timer = timing.Timer(enabled=timing_enabled, name=ts)
 
-    print(f"=== injector3D — {'N+1 (ring)' if is_ring else '5 ракурсов (tube)'}"
-          f" + жидкость + материалы ===")
+    if is_upright:
+        mode_label = 'только вертикаль (upright)'
+    elif is_ring:
+        mode_label = 'N+1 (ring)' if n > 0 else 'N=0 (ring)'
+    else:
+        mode_label = '5 ракурсов (tube)'
+    print(f"=== injector3D — {mode_label} + жидкость + материалы ===")
     print(f"    вывод: {run_dir}\n")
 
     # 1. Сцена
@@ -628,6 +644,8 @@ def main():
     on_tilt = None
     liquid_upright = None
     liquid_tilted = None
+    info_up = None
+    info_t = None
     if target_mm3 <= 0.0:
         print(f"   Вместимость полости: {capacity:.2f} мм³, "
               f"пустой цилиндр (V=0)")
@@ -653,7 +671,10 @@ def main():
     # положение, наведение и ракурс камеры пересчитываются Blender'ом
     # сами, трубка и камера всегда остаются одной системой.
     if is_ring:
-        print(f"   Серия наклонов: N={n}, θ={angle}°")
+        if n > 0:
+            print(f"   Серия наклонов: N={n}, θ={angle}°")
+        else:
+            print("   Вертикальный кадр: N=0, наклонный меш не строится")
 
         # 0) Трубка вертикальна -> привязка камеры. matrix_world трубки
         #    единична, поэтому matrix_parent_inverse тоже единичен и
@@ -671,15 +692,17 @@ def main():
                 liquid_upright = _dup_mesh_object(liquid)
                 liquid_upright.name = "Liquid_upright"
 
-        # 2) наклонный меш при φ = 0: наклон θ вокруг точки опоры
-        tube.matrix_world = tilt_matrix(math.radians(angle), 0.0)
-        bpy.context.view_layer.update()
-        with timer.measure('liquid_tilted'):
-            info_t = build_liquid(liquid, tube, target_mm3, use_fast=True,
-                                  liquid_config=liquid_config)
-            if _liquid_mesh_available(liquid, info_t):
-                liquid_tilted = _dup_mesh_object(liquid)
-                liquid_tilted.name = "Liquid_tilted"
+        # 2) наклонный меш при φ = 0: наклон θ вокруг точки опоры.
+        #    При N=0 наклонных кадров нет — меш не нужен.
+        if n > 0:
+            tube.matrix_world = tilt_matrix(math.radians(angle), 0.0)
+            bpy.context.view_layer.update()
+            with timer.measure('liquid_tilted'):
+                info_t = build_liquid(liquid, tube, target_mm3, use_fast=True,
+                                      liquid_config=liquid_config)
+                if _liquid_mesh_available(liquid, info_t):
+                    liquid_tilted = _dup_mesh_object(liquid)
+                    liquid_tilted.name = "Liquid_tilted"
 
         # 3) Трубка обратно вертикально. Камера остаётся дочерней:
         #    в рендере меняем только tube.matrix_world.
@@ -693,21 +716,26 @@ def main():
         if _liquid_mesh_available(liquid, info_up):
             print(f"   ✅ Upright: уровень {info_up['level_mm']:.3f} мм, "
                   f"V={info_up['volume_mm3']:.2f} мм³")
-            print(f"   ✅ Tilted: уровень {info_t['level_mm']:.3f} мм, "
-                  f"V={info_t['volume_mm3']:.2f} мм³")
+            if n > 0 and _liquid_mesh_available(liquid, info_t):
+                print(f"   ✅ Tilted: уровень {info_t['level_mm']:.3f} мм, "
+                      f"V={info_t['volume_mm3']:.2f} мм³")
         elif target_mm3 <= 0.0:
-            print("   ✅ Upright/Tilted: пустой цилиндр — меш жидкости "
+            label = "Upright/Tilted" if n > 0 else "Upright"
+            print(f"   ✅ {label}: пустой цилиндр — меш жидкости "
                   "не создаётся")
         else:
-            print("   ⚠  Upright/Tilted: меш жидкости не создан — рендер "
+            label = "Upright/Tilted" if n > 0 else "Upright"
+            print(f"   ⚠  {label}: меш жидкости не создан — рендер "
                   "пойдёт без жидкости")
         with timer.measure('validate_liquid'):
             if _liquid_mesh_available(liquid, info_up):
                 validate_liquid(liquid_upright, target_mm3, info_up)
-            if _liquid_mesh_available(liquid, info_t):
+            if n > 0 and _liquid_mesh_available(liquid, info_t):
                 validate_liquid(liquid_tilted, target_mm3, info_t)
-        if liquid_upright is not None and liquid_tilted is not None:
+        if liquid_upright is not None and n > 0 and liquid_tilted is not None:
             print("   ✅ Жидкость: 2 меша (upright + наклонённый)\n")
+        elif liquid_upright is not None:
+            print("   ✅ Жидкость: 1 меш (upright)\n")
         else:
             print("   ✅ Жидкость: меша нет, сцена рендерится пустой\n")
     else:
@@ -785,7 +813,10 @@ def main():
 
     # 6. Рендер
     if is_ring:
-        print(f"5/5  Рендер N+1 ({n + 1} кадров, θ={angle}°)...")
+        if n > 0:
+            print(f"5/5  Рендер N+1 ({n + 1} кадров, θ={angle}°)...")
+        else:
+            print("5/5  Рендер вертикального кадра...")
         render_ring(tube, liquid_upright, liquid_tilted,
                     output_dir=run_dir, n=n, angle=angle,
                     info_upright=info_up, info_tilted=info_t,

@@ -118,8 +118,8 @@ def _normalize_config(raw):
         raise SystemExit(f'Неизвестные ключи конфига: {", ".join(unknown)}')
 
     mode = str(raw.get('mode', 'ring')).strip().lower()
-    if mode not in ('ring', 'tube'):
-        raise SystemExit("mode: ожидался 'ring' или 'tube'")
+    if mode not in ('ring', 'tube', 'upright'):
+        raise SystemExit("mode: ожидался 'ring', 'tube' или 'upright'")
 
     volumes_raw = raw.get('volumes_mm3')
     fills_raw = raw.get('fill_fractions')
@@ -167,11 +167,14 @@ def _normalize_config(raw):
         counts = [int(_as_number(v, 'tilt_counts'))
                   for v in _as_list(raw.get('tilt_counts'), 'tilt_counts',
                                     [cfg.TILT_AZIMUTH_COUNT])]
-        if any(v < 1 for v in counts):
-            raise SystemExit('tilt_counts: N должен быть >= 1')
+        if any(v < 0 for v in counts):
+            raise SystemExit('tilt_counts: N должен быть >= 0')
         angles = [_as_number(v, 'tilt_angles')
                   for v in _as_list(raw.get('tilt_angles'), 'tilt_angles',
                                     [cfg.TILT_ANGLE_DEG])]
+    elif mode == 'upright':
+        counts = [0]
+        angles = [None]
     else:
         counts = [None]
         angles = [None]
@@ -238,6 +241,8 @@ def build_series(data):
                             parts.append(f'f{_slug_num(fill_value)}')
                         if data['mode'] == 'ring':
                             parts += [f'a{_slug_num(angle)}', f'n{count}']
+                        elif data['mode'] == 'upright':
+                            parts.append('upright')
                         else:
                             parts.append('tube')
                         parts.append(f'c_{_slug_token(camera)}')
@@ -246,9 +251,12 @@ def build_series(data):
                             raise SystemExit(
                                 f'Дублирующаяся серия: {series_id}')
                         seen.add(series_id)
-                        expected = (int(count) + 1
-                                    if data['mode'] == 'ring'
-                                    else len(cfg.TILT_VARIANTS))
+                        if data['mode'] == 'ring':
+                            expected = int(count) + 1
+                        elif data['mode'] == 'upright':
+                            expected = 1
+                        else:
+                            expected = len(cfg.TILT_VARIANTS)
                         series.append({
                             'id': series_id,
                             'mode': data['mode'],
@@ -261,7 +269,8 @@ def build_series(data):
                                               else None),
                             'tilt_count': (int(count)
                                            if data['mode'] == 'ring'
-                                           else None),
+                                           else (0 if data['mode'] == 'upright'
+                                                 else None)),
                             'tilt_angle_deg': (float(angle)
                                                if data['mode'] == 'ring'
                                                else None),
@@ -290,8 +299,12 @@ def _series_command(series, batch_root, gpus=None, shards=None,
     ]
     if gpus:
         cmd += ['--gpus', gpus]
-    if shards:
-        cmd += ['--shards', str(shards)]
+    series_shards = shards
+    if (series['mode'] in ('tube', 'upright')
+            or series.get('tilt_count') == 0):
+        series_shards = 1
+    if series_shards:
+        cmd += ['--shards', str(series_shards)]
     if blender:
         cmd += ['--blender', blender]
     if keep_shards:
@@ -501,12 +514,14 @@ def main():
     parser = argparse.ArgumentParser(
         description='Пакетный рендер матриц датасетов injector3D')
     parser.add_argument('--config', help='JSON-файл матрицы параметров')
-    parser.add_argument('--mode', choices=('ring', 'tube'))
+    parser.add_argument('--mode', choices=('ring', 'tube', 'upright'))
     parser.add_argument('--liquids', help='например: water,glycerol')
     parser.add_argument('--volumes', help='объёмы в мм³ через запятую')
     parser.add_argument('--fill-fractions', help='доли вместимости через запятую')
     parser.add_argument('--tilt-angles', help='углы наклона через запятую')
-    parser.add_argument('--tilt-counts', help='числа азимутов N через запятую')
+    parser.add_argument('--tilt-counts',
+                        help='числа азимутов N через запятую; 0 — только '
+                             'вертикальный кадр')
     parser.add_argument('--cameras', help='пресеты камеры через запятую')
     parser.add_argument('--tag', help='суффикс имён файлов')
     parser.add_argument('--extra-args', action='append', default=[],
@@ -564,9 +579,10 @@ def main():
     data = _normalize_config(raw)
     gpus = args.gpus if args.gpus is not None else data['gpus']
     shards = args.shards if args.shards is not None else data['shards']
-    if data['mode'] == 'tube' and shards not in (None, 1):
-        parser.error('--mode tube поддерживает только --shards 1')
-    if data['mode'] == 'tube' and shards is None:
+    if data['mode'] in ('tube', 'upright') and shards not in (None, 1):
+        parser.error(
+            f'--mode {data["mode"]} поддерживает только --shards 1')
+    if data['mode'] in ('tube', 'upright') and shards is None:
         shards = 1
 
     series = _limit_series(build_series(data), args.limit)

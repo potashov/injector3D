@@ -1,7 +1,7 @@
 # Пункт 6: CLI-обвязка, пресеты жидкостей, камера, GLB и параллельный рендер
 
 **Дата:** 7 ноября 2026 (batch runner — 8 ноября 2026)
-**Статус:** пункт 6 реализован. Есть режимы `--mode ring|tube`,
+**Статус:** пункт 6 реализован. Есть режимы `--mode ring|tube|upright`,
 `--output-dir` с каталогом прогона по timestamp, параметры объёма, выбор
 типа жидкости (`water`, `glycerol`, `ethanol`, `mineral_oil`) и их
 физических свойств, пресеты и параметры камеры (`reference`, `studio`),
@@ -16,7 +16,7 @@
 
 | Флаг | Смысл |
 |------|-------|
-| `--mode ring\|tube` | режим рендера: `ring` — N+1 (по умолчанию), `tube` — 5 фиксированных ракурсов |
+| `--mode ring\|tube\|upright` | режим рендера: `ring` — N+1 (по умолчанию), `tube` — 5 фиксированных ракурсов, `upright` — только вертикальный кадр (алиас `--tilt-count 0`) |
 | `--output-dir PATH` | база вывода; прогон кладётся в `PATH/<YYYYMMDD_HHMM>/` (по умолчанию `config.OUTPUT_DIR`) |
 | `--fill-fraction F` | доля вместимости, `0 <= F <= 1`; `0` — пустой цилиндр; по умолчанию `FILL_FRACTION` |
 | `--volume-mm3 V` | абсолютный объём в мм³, `0 <= V <= capacity_mm3()`; `0` — пустой цилиндр; взаимоисключающий с `--fill-fraction` |
@@ -42,6 +42,11 @@
 | `--graduation` | нанести шкалу объёма на стекло (по умолчанию выключена) |
 | `--no-graduation` | не наносить шкалу, даже если включена в конфиге |
 
+`--tilt-count 0` — вырожденная серия N+1: рендерится только вертикальный
+кадр, наклонный меш не строится. `--mode upright` — алиас этого
+поведения; `--tilt-count` и `--tilt-angle` для него не нужны. Один кадр
+не шардируется (`--shard-count`/`--shards` должны быть 1).
+
 Примеры:
 
 ```bash
@@ -57,6 +62,10 @@ $BL --background --python injector3d/create_scene.py -- \
 $BL --background --python injector3d/create_scene.py -- \
     --mode ring --camera-preset studio --liquid-type ethanol \
     --tilt-count 8 --tilt-angle 15 --output-dir /mnt/datasets/injector
+
+# Только вертикальный кадр: N=0 или алиас режима
+$BL --background --python injector3d/create_scene.py -- --tilt-count 0
+$BL --background --python injector3d/create_scene.py -- --mode upright
 ```
 
 `--volume-mm3` проверяется по `capacity_mm3()` из параметров трубки в
@@ -92,7 +101,8 @@ python3 render_parallel.py --tilt-count 8 --tilt-angle 10 \
 2. Считает каталог прогона `<output-dir>/<timestamp>` и создаёт его —
    все шарды пишут в один каталог.
 3. Делит N наклонных кадров между `M` шардами; вертикаль рендерит
-   только шард 0.
+   только шард 0. Для `--mode upright`/`--tilt-count 0` кадр один,
+   поэтому требуется `--shards 1`.
 4. Запускает `M` процессов Blender; каждый получает
    `--shard-index/--shard-count`, свой `--gpu-index`, общий
    `--output-dir` и `--timestamp`.
@@ -138,16 +148,20 @@ python3 render_batch.py --config batch.json \
 Ключи `volumes_mm3` и `fill_fractions` взаимоисключающие; если не задан
 ни один, берётся `config.FILL_FRACTION`. Матрица разворачивается в серии
 `<жидкость>_v<объём>_a<угол>_n<N>_c_<камера>` (или
-`<жидкость>_f<доля>_tube_c_<камера>` для `--mode tube`). Каждая серия
-лежит в `<output-dir>/<batch>/<series>/`: master, manifest, PNG и
+`<жидкость>_f<доля>_tube_c_<камера>` для `--mode tube`, или
+`<жидкость>_{v<объём>|f<доля>}_upright_c_<камера>` для
+`--mode upright`). Каждая серия лежит в
+`<output-dir>/<batch>/<series>/`: master, manifest, PNG и
 shard-логи не конфликтуют между объёмами. В корне пакета пишутся
 `batch_manifest.json` (матрица, команды, статусы, пути) и `logs/`.
 
 Флаги: `--limit` (первые серии), `--resume` (пропустить серии с готовым
 manifest нужной длины), `--keep-going` (продолжать после ошибки),
-`--keep-shards`, `--dry-run` (только команды). `--mode tube` принудительно
-использует один шард. `check_batch.py` проверяет матрицу, имена серий,
-команды, лимит, resume, `batch_manifest.json` и dry-run без Blender.
+`--keep-shards`, `--dry-run` (только команды). `--mode tube` и
+`--mode upright` принудительно используют один шард; для upright
+`tilt_angles`/`tilt_counts` не используются. `check_batch.py` проверяет
+матрицу, имена серий, команды, режимы N=0/upright, лимит, resume,
+`batch_manifest.json` и dry-run без Blender.
 
 Smoke-прогон (ring, N=1, 2000 мм³, `--no-postprocess`): 2 кадра,
 manifest серии и `batch_manifest.json`; повтор с `--resume` пропускает

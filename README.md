@@ -11,7 +11,8 @@ Headless-генератор фотореалистичных синтетиче�
 
 - 1 вертикальный кадр;
 - `N` наклонов на фиксированный угол `θ` в разных плоскостях азимута `φ`;
-- обычно `N=4` или `N=8`, то есть 5 или 9 кадров.
+- обычно `N=4` или `N=8`, то есть 5 или 9 кадров;
+- при `N=0` — только вертикальный кадр.
 
 Геометрия по умолчанию: внутренний диаметр 19 мм, высота 92 мм, стенка
 1 мм, закрытое дно, открытый верх, PMMA/акрил. Доля заполнения по
@@ -47,6 +48,12 @@ $BL --version
 # Серия N+1: вертикаль + N азимутов наклона
 $BL --background --python injector3d/create_scene.py -- \
     --mode ring --tilt-count 8 --tilt-angle 10
+
+# Только вертикальный кадр (N=0)
+$BL --background --python injector3d/create_scene.py -- --tilt-count 0
+
+# То же через алиас режима
+$BL --background --python injector3d/create_scene.py -- --mode upright
 
 # 5 фиксированных ракурсов
 $BL --background --python injector3d/create_scene.py -- --mode tube
