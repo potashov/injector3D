@@ -41,6 +41,7 @@ from injector3d.render import render_tube, render_ring, tilt_matrix, export_scen
 from injector3d import config as cfg
 from injector3d import output_manager as om
 from injector3d import timing
+from injector3d import graduation as grad
 from injector3d.config import (
     INNER_DIAMETER,
     HEIGHT,
@@ -339,6 +340,7 @@ def _parse_cli(tail):
 
     export_glb_path = None
     timing_enabled = None
+    graduation_enabled = None
 
     i = 0
     while i < len(tail):
@@ -349,6 +351,14 @@ def _parse_cli(tail):
             continue
         if arg == '--timing':
             timing_enabled = True
+            i += 1
+            continue
+        if arg == '--no-graduation':
+            graduation_enabled = False
+            i += 1
+            continue
+        if arg == '--graduation':
+            graduation_enabled = True
             i += 1
             continue
         if arg == '--mode' and i + 1 < len(tail):
@@ -484,6 +494,7 @@ def _parse_cli(tail):
         'camera_distortion': camera_distortion,
         'export_glb_path': export_glb_path,
         'timing': timing_enabled,
+        'graduation': graduation_enabled,
     }
 
 
@@ -521,6 +532,9 @@ def main():
     export_glb_path = opts['export_glb_path']
     timing_enabled = (cfg.TIMING_ENABLED if opts['timing'] is None
                       else opts['timing'])
+    graduation_enabled = (bool(cfg.SCENE_GRADUATION['enabled'])
+                          if opts['graduation'] is None
+                          else opts['graduation'])
 
     postprocess, overlay = parse_render_options(tail)
 
@@ -735,6 +749,22 @@ def main():
         with timer.measure('validate_liquid'):
             if _liquid_mesh_available(liquid, info):
                 validate_liquid(liquid, target_mm3, info)
+
+    # 4b. Градуировка: риски и подписи объёма на стекле. Строится при
+    #     вертикальной трубке (все будущие наклоны наследует через
+    #     parent), поэтому вызов идёт после построения мешей жидкости.
+    graduation_params = dict(cfg.SCENE_GRADUATION)
+    graduation_params['enabled'] = graduation_enabled
+    graduation_objects = []
+    if graduation_params['enabled']:
+        print("   Градуировка...")
+        with timer.measure('graduation'):
+            graduation_objects = grad.build_graduation(
+                tube, params=graduation_params)
+        print(f"   ✅ {grad.describe(params=graduation_params)}")
+        print(f"   ✅ Разметка: {len(graduation_objects)} объект(а), "
+              f"материал {graduation_objects[0].data.materials[0].name}")
+
     print("   ✅ Готово.\n")
 
     # 5. Экспорт GLB (если запрошен) — в каталог прогона
@@ -749,6 +779,7 @@ def main():
                 objs_to_export.append(liquid_upright)
         elif _liquid_mesh_available(liquid, info):
             objs_to_export.append(liquid)
+        objs_to_export.extend(graduation_objects)
         with timer.measure('export_glb'):
             export_scene_glb(export_glb_path, objects=objs_to_export)
 

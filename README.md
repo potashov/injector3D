@@ -87,6 +87,22 @@ $BL --background --python injector3d/create_scene.py -- \
 Визуальный overlay bbox включается `--overlay-bbox` (синоним `--bbox`),
 по умолчанию выключен. Overlay не должен попадать в alpha-bbox.
 
+### Градуировка
+
+Шкала объёма на внешней стенке трубки: короткие риски через 2 мл,
+длинные на 0, 10 и 20 мл, подписи «10» и «20» повёрнуты на 180°.
+Позиции рисок считаются из геометрии трубки (`h = V/(πR²)`), а не
+снимаются с референса; нуль — внутренняя плоскость дна.
+
+```bash
+$BL --background --python injector3d/create_scene.py -- \
+    --mode ring --tilt-count 4 --tilt-angle 10 --graduation
+```
+
+По умолчанию разметка выключена; `--no-graduation` отключает её явно.
+Цвет, шрифт, кегль и размеры рисок задаются в
+`config.SCENE_GRADUATION`. Подробности — `reports/step11_graduation.md`.
+
 ## Архитектура
 
 ```mermaid
