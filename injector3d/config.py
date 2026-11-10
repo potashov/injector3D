@@ -299,7 +299,10 @@ def tilt_ring_variants(n=None, angle=None):
     if n == 0:
         return (("upright", None),)
     if angle is not None and not (0.0 < float(angle) < 90.0):
-        raise ValueError("угол наклона должен быть в диапазоне (0, 90)")
+        raise ValueError(
+            "угол наклона должен быть в диапазоне (0, 90); для "
+            "вертикального кадра используйте --tilt-count 0 или "
+            "--mode upright")
 
     step = -360.0 / n
     variants = [("upright", None)]

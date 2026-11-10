@@ -80,6 +80,12 @@
 
 ### Исправлено
 
+- **Поздняя ошибка `--tilt-angle 0`.** `create_scene.py` проверяет угол
+  до сборки сцены, `render_parallel.py`/`render_batch.py` — до запуска
+  Blender; для вертикального кадра без наклона нужно использовать
+  `--tilt-count 0` или `--mode upright`. В сообщении добавлена подсказка,
+  `render_batch.py` проверяет пары `tilt_counts`/`tilt_angles` заранее.
+  Проверки — `check_batch.py`.
 - **Малый объём при большом наклоне.** Добавлен детектор разрыва и
   плоский fallback с точным объёмом (`flat=True`). Подробности —
   `reports/step3.md`, `reports/meniscus_mixed_contact.md`.

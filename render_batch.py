@@ -172,6 +172,12 @@ def _normalize_config(raw):
         angles = [_as_number(v, 'tilt_angles')
                   for v in _as_list(raw.get('tilt_angles'), 'tilt_angles',
                                     [cfg.TILT_ANGLE_DEG])]
+        for count in counts:
+            for angle in angles:
+                try:
+                    cfg.tilt_ring_variants(count, angle)
+                except ValueError as exc:
+                    raise SystemExit(f'tilt_angles: {exc}') from None
     elif mode == 'upright':
         counts = [0]
         angles = [None]

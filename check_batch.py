@@ -91,7 +91,22 @@ def main():
         ring0[0], '/tmp/batch', gpus='0,1', shards=2,
         blender='/opt/blender')
     assert '--shards 1' in ' '.join(cmd0)
-    print('  OK  ring N=0: один вертикальный кадр, один шард')
+    ring0a0 = rb._normalize_config({
+        'volumes_mm3': [2000],
+        'tilt_counts': [0],
+        'tilt_angles': [0],
+        'liquids': ['water'],
+    })
+    assert ring0a0['tilt_counts'] == [0]
+    _expect_exit(
+        lambda: rb._normalize_config({
+            'volumes_mm3': [2000],
+            'tilt_counts': [4],
+            'tilt_angles': [0],
+            'liquids': ['water'],
+        }), 'угол наклона должен быть в диапазоне (0, 90)')
+    print('  OK  ring N=0: один вертикальный кадр, один шард; '
+          'angle 0 при N>0 отклоняется раньше Blender')
 
     empty = rb.build_series(rb._normalize_config({
         'volumes_mm3': [0],

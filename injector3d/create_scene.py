@@ -600,6 +600,11 @@ def main():
     if is_ring and n == 0 and shard_count > 1:
         raise SystemExit(
             'Ошибка: N=0 рендерит один кадр; --shard-count должен быть 1')
+    if is_ring:
+        try:
+            cfg.tilt_ring_variants(n, angle)
+        except ValueError as exc:
+            raise SystemExit(f'Ошибка: {exc}') from None
 
     # Каталог прогона считается здесь один раз, чтобы кадры, master
     # `.blend`, manifest и GLB легли в него же (а не в разные папки).

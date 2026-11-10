@@ -24,6 +24,7 @@ import sys
 PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, PROJECT_DIR)
 
+from injector3d import config as cfg
 from injector3d import output_manager as om
 from injector3d import timing
 
@@ -150,6 +151,7 @@ def main():
                         help='не удалять manifest шардов после слияния')
     args, forwarded = parser.parse_known_args()
     tilt_count = _value_after(forwarded, '--tilt-count')
+    tilt_angle = _value_after(forwarded, '--tilt-angle')
 
     gpus = ([int(x) for x in args.gpus.split(',')]
             if args.gpus else _detect_gpus())
@@ -173,6 +175,19 @@ def main():
     if single_frame and shards != 1:
         raise SystemExit('--mode upright/--tilt-count 0 рендерит один кадр: '
                          '--shards должен быть 1')
+    if args.mode == 'ring':
+        try:
+            n = (int(tilt_count) if tilt_count is not None
+                 else cfg.TILT_AZIMUTH_COUNT)
+            angle = (float(tilt_angle) if tilt_angle is not None
+                     else cfg.TILT_ANGLE_DEG)
+        except (TypeError, ValueError):
+            raise SystemExit(
+                '--tilt-count/--tilt-angle: ожидалось число') from None
+        try:
+            cfg.tilt_ring_variants(n, angle)
+        except ValueError as exc:
+            raise SystemExit(f'Ошибка: {exc}') from None
 
     # Timestamp читаем ДО _strip_options: он приходит в forwarded и будет
     # вырезан оттуда, а каталог прогона нужен уже сейчас.

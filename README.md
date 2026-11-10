@@ -55,6 +55,9 @@ $BL --background --python injector3d/create_scene.py -- --tilt-count 0
 # То же через алиас режима
 $BL --background --python injector3d/create_scene.py -- --mode upright
 
+# Важно: --tilt-angle 0 не заменяет N=0; при N>0 угол должен быть
+# строго в (0, 90).
+
 # 5 фиксированных ракурсов
 $BL --background --python injector3d/create_scene.py -- --mode tube
 
