@@ -32,14 +32,17 @@ import json
 import os
 import re
 import shlex
+import shutil
 import subprocess
 import sys
+import tempfile
 import time
 
 PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, PROJECT_DIR)
 
 from injector3d import config as cfg
+from injector3d import dataset as dataset_info
 from injector3d import output_manager as om
 from injector3d import timing
 
@@ -60,6 +63,8 @@ RESERVED_EXTRA_ARGS = {
     '--contact-angle', '--absorption-density', '--camera-preset',
     '--camera-distance', '--camera-z', '--camera-target-z',
     '--camera-lens', '--camera-roll', '--camera-distortion',
+    '--dataset', '--dataset-append', '--dataset-overwrite',
+    '--dataset-split', '--dataset-seed', '--keep-work',
 }
 
 
@@ -535,7 +540,9 @@ def main():
                         help='дополнительные аргументы create_scene.py; '
                              'например: --extra-args=--no-postprocess')
     parser.add_argument('--output-dir', default=cfg.OUTPUT_DIR,
-                        help='база вывода; пакет ляжет в <output-dir>/<batch>')
+                        help='база вывода; пакет ляжет в '
+                             '<output-dir>/<batch>, а с --dataset это '
+                             'корень плоского датасета')
     parser.add_argument('--timestamp', help='имя каталога пакета')
     parser.add_argument('--gpus', help='индексы GPU для render_parallel.py')
     parser.add_argument('--shards', type=int, help='число шардов на серию')
@@ -547,6 +554,18 @@ def main():
                         help='продолжать после ошибки серии')
     parser.add_argument('--keep-shards', action='store_true',
                         help='не удалять manifest шардов')
+    parser.add_argument('--dataset', action='store_true',
+                        help='собрать один плоский датасет в --output-dir')
+    parser.add_argument('--dataset-append', action='store_true',
+                        help='дополнить существующий датасет')
+    parser.add_argument('--dataset-overwrite', action='store_true',
+                        help='перезаписать существующий датасет')
+    parser.add_argument('--dataset-split',
+                        help='доли train,val,test; по умолчанию 0.8,0.1,0.1')
+    parser.add_argument('--dataset-seed', type=int,
+                        help='seed разбиения датасета')
+    parser.add_argument('--keep-work', metavar='DIR',
+                        help='сохранить work-dir пакета в DIR')
     parser.add_argument('--dry-run', action='store_true',
                         help='показать команды без запуска')
     args = parser.parse_args()
@@ -583,6 +602,33 @@ def main():
         raw['extra_args'] = extra
 
     data = _normalize_config(raw)
+    dataset_ratios = None
+    if args.dataset:
+        if args.dataset_append and args.dataset_overwrite:
+            parser.error(
+                '--dataset-append и --dataset-overwrite взаимоисключающие')
+        if data['fill_fractions'] is not None:
+            parser.error('--dataset несовместим с fill_fractions')
+        if data['volumes_mm3'] is None:
+            parser.error('--dataset требует volumes_mm3')
+        for volume in data['volumes_mm3']:
+            try:
+                dataset_info.class_id_for_volume_mm3(volume)
+            except dataset_info.DatasetError as exc:
+                parser.error(f'--dataset: {exc}')
+        for arg in data['extra_args']:
+            key = arg.split('=', 1)[0]
+            if key in ('--no-postprocess', '--graduation', '--dataset',
+                       '--dataset-append', '--dataset-overwrite') \
+                    or key.startswith('--overlay-'):
+                parser.error(
+                    f'extra_args: {key} несовместим с --dataset')
+        try:
+            dataset_ratios = dataset_info.parse_split_ratios(
+                args.dataset_split)
+        except dataset_info.DatasetError as exc:
+            parser.error(f'--dataset: {exc}')
+
     gpus = args.gpus if args.gpus is not None else data['gpus']
     shards = args.shards if args.shards is not None else data['shards']
     if data['mode'] in ('tube', 'upright') and shards not in (None, 1):
@@ -596,7 +642,18 @@ def main():
     if not re.fullmatch(r'[A-Za-z0-9_.-]+', batch_id):
         parser.error('--timestamp: допустимы буквы, цифры, точка, '
                      'подчёркивание и дефис')
-    batch_root = om.render_dir(args.output_dir, batch_id)
+    dataset_root = None
+    work_root = None
+    if args.dataset:
+        dataset_root = os.path.abspath(args.output_dir)
+        if args.keep_work:
+            work_root = os.path.abspath(args.keep_work)
+            os.makedirs(work_root, exist_ok=True)
+        else:
+            work_root = tempfile.mkdtemp(prefix='injector3d_dataset_')
+        batch_root = om.render_dir(work_root, batch_id)
+    else:
+        batch_root = om.render_dir(args.output_dir, batch_id)
     commands = [
         _series_command(
             item, batch_root, gpus=gpus, shards=shards,
@@ -606,6 +663,8 @@ def main():
 
     print(f'Пакет: {batch_id}')
     print(f'  каталог: {batch_root}')
+    if args.dataset:
+        print(f'  датасет: {dataset_root}')
     print(f'  серий: {len(series)}')
     print(f'  режим: {data["mode"]}')
 
@@ -613,6 +672,8 @@ def main():
         for index, (item, cmd) in enumerate(zip(series, commands), 1):
             print(f'\n[{index}/{len(series)}] {item["id"]}')
             print('  ' + shlex.join(cmd))
+        if args.dataset and not args.keep_work:
+            shutil.rmtree(work_root, ignore_errors=True)
         return
 
     om.ensure_dir(batch_root)
@@ -651,9 +712,37 @@ def main():
     if render.get('total_ms') is not None:
         print(f'  render={render["total_ms"] / 1000.0:.2f} с, '
               f'postprocess={postprocess.get("total_ms", 0.0) / 1000.0:.2f} с')
-    print(f'Manifest пакета: {os.path.join(batch_root, BATCH_MANIFEST)}')
     if failed or bad:
+        if args.dataset:
+            print(f'  ! Датасет не собран из-за ошибок; work-dir сохранён: '
+                  f'{work_root}')
+        else:
+            print(f'Manifest пакета: '
+                  f'{os.path.join(batch_root, BATCH_MANIFEST)}')
         raise SystemExit(1)
+    if args.dataset:
+        try:
+            summary = dataset_info.export_run(
+                dataset_root, batch_root, recursive=True,
+                append=args.dataset_append,
+                overwrite=args.dataset_overwrite,
+                split_ratios=dataset_ratios, split_seed=args.dataset_seed)
+        except dataset_info.DatasetError as exc:
+            print(f'  ! Датасет не собран: {exc}')
+            print(f'  work-dir сохранён: {work_root}')
+            raise SystemExit(1) from None
+        counts = summary['counts']
+        print(f'  датасет: {dataset_root}')
+        print(f'  кадров: {counts["images"]} '
+              f'(train={counts["train"]}, val={counts["val"]}, '
+              f'test={counts["test"]})')
+        if args.keep_work:
+            print(f'  work-dir сохранён: {work_root}')
+        else:
+            shutil.rmtree(work_root, ignore_errors=True)
+        print(f'Готово: датасет {dataset_root}')
+    else:
+        print(f'Manifest пакета: {os.path.join(batch_root, BATCH_MANIFEST)}')
 
 
 if __name__ == '__main__':

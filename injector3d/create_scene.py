@@ -18,6 +18,8 @@ injector3d — entry-point сборки сцены и рендера.
 
 import sys
 import os
+import shutil
+import tempfile
 
 # Добавляем корень пакета в sys.path (при запуске `python create_scene.py`)
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -40,6 +42,7 @@ from injector3d.liquid import (
 from injector3d.scene import setup_scene, attach_camera_to_tube
 from injector3d.render import render_tube, render_ring, tilt_matrix, export_scene_glb
 from injector3d import config as cfg
+from injector3d import dataset as dataset_info
 from injector3d import output_manager as om
 from injector3d import timing
 from injector3d import graduation as grad
@@ -112,6 +115,10 @@ def parse_render_options(tail):
             overlay['bbox'] = True
         elif arg in ('--no-overlay-bbox', '--no-bbox'):
             overlay['bbox'] = False
+        elif arg == '--overlay-labels':
+            overlay['labels'] = True
+        elif arg == '--no-overlay-labels':
+            overlay['labels'] = False
         i += 1
     return postprocess, overlay
 
@@ -342,6 +349,12 @@ def _parse_cli(tail):
     export_glb_path = None
     timing_enabled = None
     graduation_enabled = None
+    dataset_enabled = False
+    dataset_append = False
+    dataset_overwrite = False
+    dataset_split = None
+    dataset_seed = None
+    keep_work = None
 
     i = 0
     while i < len(tail):
@@ -361,6 +374,30 @@ def _parse_cli(tail):
         if arg == '--graduation':
             graduation_enabled = True
             i += 1
+            continue
+        if arg == '--dataset':
+            dataset_enabled = True
+            i += 1
+            continue
+        if arg == '--dataset-append':
+            dataset_append = True
+            i += 1
+            continue
+        if arg == '--dataset-overwrite':
+            dataset_overwrite = True
+            i += 1
+            continue
+        if arg == '--dataset-split' and i + 1 < len(tail):
+            dataset_split = tail[i + 1]
+            i += 2
+            continue
+        if arg == '--dataset-seed' and i + 1 < len(tail):
+            dataset_seed = int(tail[i + 1])
+            i += 2
+            continue
+        if arg == '--keep-work' and i + 1 < len(tail):
+            keep_work = tail[i + 1]
+            i += 2
             continue
         if arg == '--mode' and i + 1 < len(tail):
             mode = tail[i + 1].strip().lower()
@@ -496,6 +533,12 @@ def _parse_cli(tail):
         'export_glb_path': export_glb_path,
         'timing': timing_enabled,
         'graduation': graduation_enabled,
+        'dataset': dataset_enabled,
+        'dataset_append': dataset_append,
+        'dataset_overwrite': dataset_overwrite,
+        'dataset_split': dataset_split,
+        'dataset_seed': dataset_seed,
+        'keep_work': keep_work,
     }
 
 
@@ -536,12 +579,44 @@ def main():
     graduation_enabled = (bool(cfg.SCENE_GRADUATION['enabled'])
                           if opts['graduation'] is None
                           else opts['graduation'])
+    dataset_enabled = opts['dataset']
+    dataset_append = opts['dataset_append']
+    dataset_overwrite = opts['dataset_overwrite']
+    dataset_split = opts['dataset_split']
+    dataset_seed = opts['dataset_seed']
+    keep_work = opts['keep_work']
 
     postprocess, overlay = parse_render_options(tail)
 
     if mode not in RENDER_MODES:
         raise SystemExit(
             f'Ошибка: --mode должен быть одним из {", ".join(RENDER_MODES)}')
+
+    dataset_ratios = None
+    if dataset_enabled:
+        if shard_count != 1:
+            raise SystemExit(
+                'Ошибка: --dataset требует --shard-count 1')
+        if not postprocess.get('enabled', True):
+            raise SystemExit(
+                'Ошибка: --dataset требует включённую постобработку')
+        if overlay.get('labels'):
+            raise SystemExit(
+                'Ошибка: --overlay-labels нельзя сочетать с --dataset')
+        if dataset_append and dataset_overwrite:
+            raise SystemExit(
+                'Ошибка: --dataset-append и --dataset-overwrite '
+                'взаимоисключающие')
+        try:
+            dataset_ratios = dataset_info.parse_split_ratios(dataset_split)
+        except dataset_info.DatasetError as exc:
+            raise SystemExit(f'Ошибка: {exc}') from None
+        for key in ('volume', 'azimuth', 'tilt_deg', 'ellipse_center',
+                    'center_marker', 'liquid', 'bbox', 'labels'):
+            overlay[key] = False
+        if graduation_enabled:
+            print('  ! --dataset: градуировка отключена')
+            graduation_enabled = False
 
     liquid_config = get_liquid_config(
         preset=liquid_type,
@@ -584,6 +659,13 @@ def main():
         target_mm3 = target_volume_mm3(fill_fraction)
     if shard_count < 1 or not (0 <= shard_index < shard_count):
         raise ValueError('нужно 0 <= shard-index < shard-count')
+    if dataset_enabled:
+        try:
+            dataset_info.class_id_for_volume_mm3(target_mm3)
+        except dataset_info.DatasetError as exc:
+            raise SystemExit(
+                f'Ошибка: --dataset: {exc}; задайте объём, кратный '
+                f'100 мм³ (0.1 мл), в пределах 0..20000 мм³') from None
 
     # Сцена всегда полная: жидкость и материалы собираются в каждом
     # прогоне. Режим выбирается явно — раньше его задавал номер пункта.
@@ -609,8 +691,23 @@ def main():
     # Каталог прогона считается здесь один раз, чтобы кадры, master
     # `.blend`, manifest и GLB легли в него же (а не в разные папки).
     # `--output-dir` — это база: прогон всегда в подкаталоге по ts.
+    # В dataset-режиме `--output-dir` — корень датасета, а рендер идёт
+    # во временный work-dir, который после экспорта удаляется.
     ts = timestamp or om.new_timestamp()
-    run_dir = om.render_dir(output_dir or cfg.OUTPUT_DIR, ts)
+    dataset_root = None
+    work_root = None
+    keep_dataset_work = False
+    if dataset_enabled:
+        dataset_root = os.path.abspath(output_dir or cfg.OUTPUT_DIR)
+        if keep_work:
+            work_root = os.path.abspath(keep_work)
+            keep_dataset_work = True
+            os.makedirs(work_root, exist_ok=True)
+        else:
+            work_root = tempfile.mkdtemp(prefix='injector3d_dataset_')
+        run_dir = om.render_dir(work_root, ts)
+    else:
+        run_dir = om.render_dir(output_dir or cfg.OUTPUT_DIR, ts)
     timer = timing.Timer(enabled=timing_enabled, name=ts)
 
     if is_upright:
@@ -620,7 +717,12 @@ def main():
     else:
         mode_label = '5 ракурсов (tube)'
     print(f"=== injector3D — {mode_label} + жидкость + материалы ===")
-    print(f"    вывод: {run_dir}\n")
+    print(f"    вывод: {run_dir}")
+    if dataset_enabled:
+        print(f"    датасет: {dataset_root}")
+        print(f"    work-dir: {work_root}\n")
+    else:
+        print()
 
     # 1. Сцена
     print("1/5  Настройка сцены...")
@@ -829,16 +931,37 @@ def main():
                     shard=((shard_index, shard_count)
                            if shard_count > 1 else None),
                     tag=tag, liquid_type=liquid_config['name'],
-                    timer=timer)
+                    timer=timer, target_volume_mm3=target_mm3)
     else:
         print("5/5  Рендер под 5 углами...")
         render_tube(tube, camera, output_dir=run_dir, on_tilt=on_tilt,
                     postprocess=postprocess, overlay=overlay,
                     tag=tag, liquid_type=liquid_config['name'],
-                    timer=timer)
+                    timer=timer, target_volume_mm3=target_mm3)
     print("   ✅ Готово.\n")
 
-    print(f"=== Прогон завершён: {run_dir} ===")
+    if dataset_enabled:
+        try:
+            summary = dataset_info.export_run(
+                dataset_root, run_dir, append=dataset_append,
+                overwrite=dataset_overwrite,
+                split_ratios=dataset_ratios, split_seed=dataset_seed)
+        except dataset_info.DatasetError as exc:
+            print(f'  ! Датасет не собран: {exc}')
+            print(f'  work-dir сохранён: {work_root}')
+            raise SystemExit(1) from None
+        counts = summary['counts']
+        print(f"   Датасет: {dataset_root}")
+        print(f"   Кадров: {counts['images']} "
+              f"(train={counts['train']}, val={counts['val']}, "
+              f"test={counts['test']})")
+        if keep_dataset_work:
+            print(f"   work-dir сохранён: {work_root}")
+        else:
+            shutil.rmtree(work_root, ignore_errors=True)
+        print(f"=== Датасет готов: {dataset_root} ===")
+    else:
+        print(f"=== Прогон завершён: {run_dir} ===")
 
 
 if __name__ == "__main__":

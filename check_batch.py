@@ -161,6 +161,11 @@ def main():
     assert '--keep-shards' in text
     print('  OK  команда серии содержит матрицу, GPU, шарды и tag')
 
+    for key in ('--dataset', '--dataset-split', '--keep-work'):
+        assert key in rb.RESERVED_EXTRA_ARGS, key
+    assert '--dataset' not in cmd, cmd
+    print('  OK  dataset-флаги не уходят в дочерний create_scene')
+
     assert len(rb._limit_series(series, 3)) == 3
     print('  OK  --limit ограничивает число серий')
 

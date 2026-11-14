@@ -185,6 +185,7 @@ def get_camera_config(preset=None, **overrides):
         raise ValueError(
             f"Неизвестный пресет камеры '{preset_name}'. Доступны: {available}")
     cfg = dict(CAMERA_PRESETS[preset_name])
+    cfg['name'] = preset_name
     for k, v in overrides.items():
         if v is not None:
             cfg[k] = v
@@ -244,6 +245,7 @@ SCENE_OVERLAY = {
     'center_marker': False,
     'liquid': False,
     'bbox': False,
+    'labels': False,
     'font_path': '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',
     'font_size_px': 18,
     'margin_px': 12,
@@ -255,6 +257,25 @@ SCENE_OVERLAY = {
     'bbox_color': (0, 255, 0, 255),
     'bbox_line_width_px': 2,
     'bbox_point_size_px': 3,
+}
+
+# Экспорт YOLO-pose датасета. Класс — уровень жидкости с шагом 0.1 мл:
+# class_id = target_volume_mm3 / 100, диапазон 0..200 (0..20 мл).
+SCENE_DATASET = {
+    'enabled': False,
+    'class_step_ml': 0.1,
+    'class_max': 200,
+    'class_prefix': 'level_vol',
+    'require_volume_grid': True,
+    'reject_border_bbox': True,
+    'reject_border_edges': ('left', 'right'),
+    'split_ratios': (0.8, 0.1, 0.1),
+    'split_seed': 0,
+    'images_dir': 'images',
+    'labels_dir': 'labels',
+    'data_yaml': 'data.yaml',
+    'manifest': 'dataset_manifest.json',
+    'split_files': ('train.txt', 'val.txt', 'test.txt'),
 }
 
 # Камера на -Y смотрит в +Y (up = +Z), поэтому в кадре +X — вправо:

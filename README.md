@@ -31,7 +31,7 @@ Headless-генератор фотореалистичных синтетиче�
 - локальная сборка Blender 5.2.3 LTS в
   `./blender-5.2.3-linux-x64/blender` (папка в `.gitignore`);
 - системный `python3` с PIL/numpy для постобработки и launcher-скриптов;
-- окружение проверено 2026-11-08 на коммите `6d2f83f`: 2× Quadro P1000,
+- окружение проверено 2026-11-14 на коммите `ab42e5c`: 2× Quadro P1000,
   CUDA 12.4, драйвер 550.163.01;
 - при отсутствии CUDA используется CPU-fallback.
 
@@ -70,6 +70,10 @@ python3 render_parallel.py --tilt-count 8 --tilt-angle 10 --gpus 0,1
 # Пакетная матрица параметров
 python3 render_batch.py --liquids water,glycerol \
     --volumes 2000,5000 --tilt-angles 10,20 --gpus 0,1
+
+# Плоский YOLO-pose датасет: один объём, класс 50 (5 мл)
+python3 render_parallel.py --dataset --mode upright --volume-mm3 5000 \
+    --output-dir /mnt/datasets/levels --gpus 0
 ```
 
 Полный набор флагов — `reports/step6_cli.md`; имена файлов формирует
@@ -96,6 +100,33 @@ $BL --background --python injector3d/create_scene.py -- \
 пересчитывается в final-координаты; он всегда попадает в manifest кадра.
 Визуальный overlay bbox включается `--overlay-bbox` (синоним `--bbox`),
 по умолчанию выключен. Overlay не должен попадать в alpha-bbox.
+
+### Датасет YOLO-pose
+
+`--dataset` собирает после рендера плоский датасет в `--output-dir`:
+`images/`, `labels/`, `train.txt`, `val.txt`, `test.txt`, `data.yaml` и
+`dataset_manifest.json`. Рендер идёт во временный work-dir, который
+удаляется после экспорта; `--keep-work DIR` сохраняет его для отладки.
+
+Класс — уровень жидкости с шагом 0.1 мл:
+`class_id = round(target_volume_mm3 / 100)`, диапазон `0..200`
+(`level_vol_0.0 … level_vol_20.0`). Объём должен быть кратен 100 мм³;
+`V=0` разрешён, keypoint — центр внутреннего дна. Метка:
+
+```text
+<class_id> <bbox_x> <bbox_y> <bbox_w> <bbox_h> <kpt_x> <kpt_y>
+```
+
+Координаты нормированы по фактическому размеру финального PNG.
+`--dataset` требует включённую постобработку, запрещает
+`--overlay-labels` и `fill_fractions`, отключает градуировку. Bbox,
+касающийся левой/правой границы, отклоняется; верх/низ для высокой
+трубки разрешены. Split по умолчанию `0.8,0.1,0.1` по сериям,
+`--dataset-split` и `--dataset-seed` меняют его; `--dataset-append` и
+`--dataset-overwrite` управляют существующим датасетом.
+
+`--overlay-labels` рисует ту же строку YOLO внизу слева — только для
+отладочного preview, не для обучения.
 
 ### Градуировка
 
@@ -134,6 +165,7 @@ flowchart TD
         MAT["materials.py"]
         RND["render.py"]
         BBOX["bbox.py"]
+        DS["dataset.py"]
         TIM["timing.py"]
         OM["output_manager.py"]
     end
@@ -163,6 +195,10 @@ flowchart TD
     PP --> OUT
     CS --> OM
     RND --> OM
+    RP --> DS
+    RB --> DS
+    CS --> DS
+    DS --> OUT
 
     CFG -.-> TIM
     CS -.-> TIM
@@ -177,8 +213,11 @@ flowchart TD
 рендерит raw PNG, считает bbox и отправляет кадр в
 `postprocess_reference.py --worker`. `render_parallel.py` и
 `render_batch.py` — внешние launcher-скрипты: они запускают несколько
-процессов Blender и сливают manifest шардов/серий. Тайминги пишутся в
-manifest и не зависят от `bpy`. Причины ключевых решений — `docs/adr/`.
+процессов Blender и сливают manifest шардов/серий. В режиме `--dataset`
+`injector3d/dataset.py` после рендера читает финальные manifest,
+копирует PNG в плоский датасет и строит метки/сплиты. Тайминги пишутся
+в manifest и не зависят от `bpy`. Причины ключевых решений —
+`docs/adr/`.
 
 ## Выходные файлы
 
@@ -209,6 +248,18 @@ manifest и не зависят от `bpy`. Причины ключевых ре
 <output-dir>/<batch>/logs/
 ```
 
+Датасет (`--dataset`) — плоский, без timestamp/batch/series:
+
+```text
+<output-dir>/images/ds_<index>_<class>_<liquid>_v<volume>_<camera>_<variant>[_<tag>].png
+<output-dir>/labels/<то же имя>.txt
+<output-dir>/train.txt
+<output-dir>/val.txt
+<output-dir>/test.txt
+<output-dir>/data.yaml
+<output-dir>/dataset_manifest.json
+```
+
 PNG в `output/` — результат работы и отслеживается git; `.blend`,
 `.blend1`, `.json`, `.log`, `.glb` в `output/` игнорируются. Новые
 прогоны делайте в новый каталог, не перезаписывайте старые. `output/06120/`
@@ -227,6 +278,7 @@ $BL --background --python check_meniscus_mixed.py
 python3 check_postprocess.py
 python3 check_batch.py
 python3 check_timing.py
+python3 check_dataset.py
 
 # Сводка таймингов
 python3 summarize_timings.py output/<прогон>/water_manifest.json

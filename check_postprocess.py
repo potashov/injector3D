@@ -6,12 +6,13 @@ import json
 import os
 import tempfile
 
-from PIL import Image, ImageDraw
+from PIL import Image, ImageChops, ImageDraw
 
 from injector3d.bbox import bbox_record
 from postprocess_reference import (
     _alpha_bbox,
     _batch_namespace,
+    _draw_overlay,
     _finalize_center,
     _overlay_lines,
     _process,
@@ -85,9 +86,14 @@ def main():
         assert meta['bbox_width_px'] == 81, meta
         assert meta['bbox_height_px'] == 281, meta
         assert meta['bbox_touches_border'] is False, meta
+        assert (meta['final_width_px'], meta['final_height_px']) == (
+            200, 320), meta
         assert result['bbox_raw_px'] == [60, 20, 140, 300], result
         assert result['bbox_final_px'] == [70, 20, 150, 300], result
-        print('  OK  RGBA, shift, bbox и result JSON с длительностью')
+        assert (result['final_width_px'], result['final_height_px']) == (
+            200, 320), result
+        print('  OK  RGBA, shift, bbox, final size и result JSON '
+              'с длительностью')
 
         final_height = 160
         final = os.path.join(tmp, 'rgb.png')
@@ -136,6 +142,24 @@ def main():
         assert any('Cbbox' in line for line in lines), lines
         assert any('WxH' in line for line in lines), lines
         print('  OK  bbox: зелёная рамка, точка и строки overlay')
+
+        meta = _meta()
+        meta.update({
+            'target_volume_mm3': 5000.0,
+            'bbox_center_px': [100.0, 160.0],
+            'bbox_width_px': 81.0,
+            'bbox_height_px': 281.0,
+            'ellipse_center_2d_px': [100.0, 160.0],
+            'bbox_touches_border': False,
+            'bbox_source': 'alpha',
+        })
+        meta['overlay']['labels'] = True
+        source = Image.new('RGBA', (200, 320), (0, 0, 0, 0))
+        out = _draw_overlay(source, meta)
+        diff = ImageChops.difference(out, source)
+        assert diff.getbbox() is not None, 'метка не нарисована'
+        assert diff.getbbox()[1] > 250, diff.getbbox()
+        print('  OK  overlay-labels: строка YOLO внизу слева')
 
         job = {'final': 'x.png', 'raw': 'x_raw.png', 'result': 'r.json'}
         opts = {'shift_x_px': 7, 'target_height_px': 0,

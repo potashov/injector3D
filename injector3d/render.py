@@ -29,6 +29,7 @@ from mathutils import Matrix, Vector
 from bpy_extras.object_utils import world_to_camera_view
 
 from .config import (
+    BOTTOM_THICKNESS,
     DEFAULT_LIQUID_TYPE,
     MM,
     OUTPUT_DIR,
@@ -216,22 +217,23 @@ def _submit_postprocess(worker, job, opts):
 
 
 def _bbox_from_png(path):
-    """Bbox готового PNG через Blender image API (без PIL)."""
+    """Bbox и размер готового PNG через Blender image API (без PIL)."""
     try:
         image = bpy.data.images.load(path, check_existing=False)
     except RuntimeError:
-        return None
+        return None, None
     try:
         width, height = image.size
         if width <= 0 or height <= 0:
-            return None
+            return None, None
         pixels = np.empty(width * height * 4, dtype=np.float32)
         image.pixels.foreach_get(pixels)
         rgba = pixels.reshape((height, width, 4))[::-1]
         raw, source = bbox_info.alpha_bbox(rgba)
         if raw is None:
-            return None
-        return bbox_info.bbox_record(raw, (width, height), source=source)
+            return None, (width, height)
+        return (bbox_info.bbox_record(raw, (width, height), source=source),
+                (width, height))
     finally:
         bpy.data.images.remove(image)
 
@@ -255,7 +257,7 @@ def _finish_postprocess_worker(worker, jobs):
                         'bbox_raw_px', 'bbox_final_px', 'bbox_center_px',
                         'bbox_width_px', 'bbox_height_px',
                         'bbox_alpha_threshold', 'bbox_touches_border',
-                        'bbox_source'):
+                        'bbox_source', 'final_width_px', 'final_height_px'):
                     if result.get(key) is not None:
                         job['metadata'][key] = result[key]
                 process_ms = (result.get('timings_ms') or {}).get(
@@ -349,7 +351,7 @@ def _render_one(scene, final_path, variant_name, metadata=None,
     active = meta['overlay']
     if any(active.get(k) for k in
            ('volume', 'azimuth', 'tilt_deg', 'ellipse_center',
-            'center_marker', 'liquid', 'bbox')):
+            'center_marker', 'liquid', 'bbox', 'labels')):
         print('  ! Постобработка выключена — подписи/маркер/рамка пропущены')
     raw_center = meta.get('ellipse_center_2d_raw_px')
     if raw_center is not None:
@@ -357,9 +359,11 @@ def _render_one(scene, final_path, variant_name, metadata=None,
     scene.render.filepath = final_path
     with timing.timed(timings, 'render'):
         bpy.ops.render.render(write_still=True)
-    bbox_data = _bbox_from_png(final_path)
+    bbox_data, size = _bbox_from_png(final_path)
     if bbox_data is not None:
         meta.update(bbox_data)
+    if size is not None:
+        meta['final_width_px'], meta['final_height_px'] = size
     print(f'  Рендер: {variant_name} -> {os.path.basename(final_path)}')
     return {'raw': None, 'final': final_path, 'metadata': meta}
 
@@ -408,12 +412,15 @@ def _project_center_raw(center_mm, scene):
 
 
 def _frame_metadata(volume_mm3, azimuth_deg, tilt_deg, center_mm, scene,
-                    liquid_type=None, liquid_config=None):
+                    liquid_type=None, liquid_config=None,
+                    target_volume_mm3=None):
     meta = {
         'volume_mm3': volume_mm3,
         'azimuth_deg': azimuth_deg,
         'tilt_deg': tilt_deg,
     }
+    if target_volume_mm3 is not None:
+        meta['target_volume_mm3'] = target_volume_mm3
     if liquid_type:
         meta['liquid_type'] = liquid_type
     if liquid_config and 'ior' in liquid_config:
@@ -432,8 +439,13 @@ def _frame_metadata(volume_mm3, azimuth_deg, tilt_deg, center_mm, scene,
 
 
 def _center_for_info(tube, info):
-    if not info or info.get('empty') or info.get('level_mm') is None:
+    if not info:
         return None
+    if info.get('empty') or info.get('level_mm') is None:
+        # Нулевой объём: поверхности нет, ключевая точка — проекция
+        # центра внутреннего дна (z = BOTTOM_THICKNESS).
+        p = tube.matrix_world @ Vector((0.0, 0.0, BOTTOM_THICKNESS * MM))
+        return (p.x / MM, p.y / MM, p.z / MM)
     return contact_center_mm(tube.matrix_world, info['level_mm'],
                              flat=info.get('flat', False),
                              liquid_props=info.get('liquid_config'),
@@ -492,7 +504,7 @@ def export_scene_glb(filepath, objects=None):
 
 def render_tube(tube, camera, output_dir=None, on_tilt=None,
                 postprocess=None, overlay=None, tag=None,
-                liquid_type=None, timer=None):
+                liquid_type=None, timer=None, target_volume_mm3=None):
     """Рендер трубки под каждым из TILT_VARIANTS.
 
     Parameters
@@ -549,7 +561,8 @@ def render_tube(tube, camera, output_dir=None, on_tilt=None,
                 meta = _frame_metadata(
                     volume, None, _tilt_deg_from_matrix(tube.matrix_world),
                     center, scene, liquid_type=liq_type,
-                    liquid_config=liq_cfg)
+                    liquid_config=liq_cfg,
+                    target_volume_mm3=target_volume_mm3)
                 render_fname = render_filename(
                     liq_type, variant_name, tag, volume)
                 final_path = os.path.join(base, render_fname)
@@ -606,7 +619,8 @@ def render_ring(tube, liquid_upright, liquid_tilted,
                 output_dir=None, n=4, angle=10.0,
                 info_upright=None, info_tilted=None,
                 postprocess=None, overlay=None, shard=None,
-                tag=None, liquid_type=None, timer=None):
+                tag=None, liquid_type=None, timer=None,
+                target_volume_mm3=None):
     """Рендер N+1 кадров: вертикаль + N плоскостей наклона при угле `angle`.
 
     При `n=0` рендерится только вертикальный кадр; `liquid_tilted` и
@@ -709,7 +723,8 @@ def render_ring(tube, liquid_upright, liquid_tilted,
                 center = _center_for_info(tube, info)
                 meta = _frame_metadata(
                     volume, azimuth_deg, tilt_deg, center, scene,
-                    liquid_type=liq_type, liquid_config=liq_cfg)
+                    liquid_type=liq_type, liquid_config=liq_cfg,
+                    target_volume_mm3=target_volume_mm3)
                 render_fname = render_filename(
                     liq_type, variant_name, tag, volume)
                 final_path = os.path.join(base, render_fname)

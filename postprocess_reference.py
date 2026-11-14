@@ -14,6 +14,7 @@ import sys
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
+from injector3d import dataset as dataset_info
 from injector3d.bbox import alpha_bbox, bbox_record
 from injector3d.timing import now_ms
 
@@ -91,7 +92,7 @@ def _draw_overlay(image, meta):
     overlay = meta.get('overlay') or {}
     if not any(overlay.get(k) for k in
                ('volume', 'azimuth', 'tilt_deg', 'ellipse_center',
-                'center_marker', 'liquid', 'bbox')):
+                'center_marker', 'liquid', 'bbox', 'labels')):
         return image
 
     out = image.convert('RGBA')
@@ -130,6 +131,24 @@ def _draw_overlay(image, meta):
         line_step = int(overlay.get('font_size_px', 18)) + 6
         for i, line in enumerate(lines):
             draw.text((margin, margin + i * line_step), line,
+                      font=font, fill=text_color,
+                      stroke_width=stroke_width, stroke_fill=stroke_color)
+
+    if overlay.get('labels'):
+        line = dataset_info.label_line(
+            meta, out.width, out.height, strict=False)
+        if line:
+            font = _load_font(overlay.get('font_path', ''),
+                              int(overlay.get('font_size_px', 18)))
+            margin = int(overlay.get('margin_px', 12))
+            text_color = tuple(overlay.get('text_color', (0, 0, 0, 255)))
+            stroke_color = tuple(
+                overlay.get('stroke_color', (255, 255, 255, 255)))
+            stroke_width = int(overlay.get('stroke_width_px', 1))
+            text_bbox = draw.textbbox(
+                (margin, 0), line, font=font, stroke_width=stroke_width)
+            text_h = text_bbox[3] - text_bbox[1]
+            draw.text((margin, out.height - margin - text_h), line,
                       font=font, fill=text_color,
                       stroke_width=stroke_width, stroke_fill=stroke_color)
     return out
@@ -204,6 +223,7 @@ def _process(raw_path, final_path, args, meta=None):
     else:
         canvas.paste(image, (shift, 0))
     final = canvas.crop((0, 0, image.width, image.height))
+    meta['final_width_px'], meta['final_height_px'] = final.size
     final = _draw_overlay(final, meta)
 
     os.makedirs(os.path.dirname(os.path.abspath(final_path)), exist_ok=True)
@@ -219,6 +239,8 @@ def _process(raw_path, final_path, args, meta=None):
             'scale': scale,
             'shift': shift,
             'raw_height_px': raw_h,
+            'final_width_px': final.width,
+            'final_height_px': final.height,
             'ellipse_center_2d_px': meta.get('ellipse_center_2d_px'),
             'timings_ms': {
                 'postprocess': round(now_ms() - started, 3),

@@ -87,6 +87,7 @@ $BL --background --python check_graduation.py
 python3 check_postprocess.py
 python3 check_batch.py
 python3 check_timing.py
+python3 check_dataset.py
 
 # Сводка таймингов
 python3 summarize_timings.py output/<прогон>/water_manifest.json
@@ -95,6 +96,10 @@ python3 summarize_timings.py output/<прогон>/water_manifest.json
 python3 render_parallel.py --tilt-count 8 --tilt-angle 10 --gpus 0,1
 python3 render_batch.py --liquids water,glycerol \
     --volumes 2000,5000 --tilt-angles 10,20 --gpus 0,1
+
+# Плоский YOLO-pose датасет (объём кратен 100 мм³, 0..20000)
+python3 render_parallel.py --dataset --mode upright --volume-mm3 5000 \
+    --output-dir /mnt/datasets/levels --gpus 0
 
 # Диагностика CUDA/GPU
 $BL --background --python check_cuda.py
@@ -138,6 +143,37 @@ $BL --background --python gpu_info.py
 - По умолчанию разметка выключена (`SCENE_GRADUATION['enabled']`,
   флаг `--graduation`); цвет, шрифт и кегль меняются только в конфиге.
 
+### Датасет YOLO-pose
+
+- `--dataset` собирает плоский датасет в `--output-dir`: `images/`,
+  `labels/`, `train.txt`, `val.txt`, `test.txt`, `data.yaml`,
+  `dataset_manifest.json`; без timestamp/batch/series.
+- Класс: `class_id = round(target_volume_mm3 / 100)`, шаг 0.1 мл,
+  диапазон `0..200`; имя класса `level_vol_<мл>`, последний —
+  `level_vol_20.0`.
+- Метка: `<class> <bbox_x> <bbox_y> <bbox_w> <bbox_h> <kpt_x> <kpt_y>`,
+  нормировка по фактическому размеру финального PNG; без Y-flip.
+- Источники: `bbox_center_px`, `bbox_width_px`, `bbox_height_px`,
+  `ellipse_center_2d_px`; класс — по `target_volume_mm3`, не по
+  фактическому `volume_mm3`.
+- `V=0`: keypoint — проекция центра внутреннего дна
+  (`z = BOTTOM_THICKNESS`).
+- Объём в dataset-режиме строго кратен 100 мм³ и не больше 20000 мм³;
+  `fill_fractions` запрещены.
+- Bbox, касающийся левой/правой границы, отклоняется; верх/низ для
+  высокой трубки разрешены. `bbox_source` должен быть `alpha`.
+- `--dataset` требует постобработку, запрещает `--overlay-labels`,
+  отключает градуировку; overlay-подписи — только отладочный preview.
+- Рендер идёт во временный work-dir, удаляемый после экспорта;
+  `--keep-work DIR` сохраняет его. `--dataset-append` и
+  `--dataset-overwrite` управляют существующим датасетом.
+- Split по умолчанию `0.8/0.1/0.1`, детерминированно по сериям,
+  `seed=0`; `--dataset-split`/`--dataset-seed` меняют параметры.
+- `create_scene.py --dataset` — только при `--shard-count 1`;
+  `render_parallel.py` экспортирует после слияния manifest;
+  `render_batch.py` — после всех серий, рекурсивно по подкаталогам.
+- `--dataset` не передаётся дочернему `create_scene.py`.
+
 ### Камера и наклон
 
 - Камера жёстко привязана к трубке через `attach_camera_to_tube()`.
@@ -180,7 +216,8 @@ $BL --background --python gpu_info.py
 `create_scene.py` собирает сцену, строит трубку и жидкость, применяет
 материалы и вызывает `render.py`; `render_parallel.py` и
 `render_batch.py` — launcher-скрипты; постобработка идёт через
-`postprocess_reference.py --worker`.
+`postprocess_reference.py --worker`; `injector3d/dataset.py` собирает
+YOLO-pose датасет из финальных manifest без Blender.
 
 Причины ключевых решений — `docs/adr/`; подробности —
 `reports/README.md`, `reports/step*.md`, `reports/meniscus_mixed_*.md`,
@@ -197,5 +234,5 @@ $BL --background --python gpu_info.py
 - Если проверка невозможна — явно укажите это и не выдавайте
   предположение за факт.
 
-Окружение проверено 2026-11-08 на коммите `6d2f83f`. Числа и версии
+Окружение проверено 2026-11-14 на коммите `ab42e5c`. Числа и версии
 могут меняться; фактические значения сверяйте с `config.py` и manifest.

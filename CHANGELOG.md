@@ -11,6 +11,16 @@
 
 ### Добавлено
 
+- **Плоский YOLO-pose датасет.** `--dataset` собирает `images/`,
+  `labels/`, `train.txt`/`val.txt`/`test.txt`, `data.yaml` и
+  `dataset_manifest.json` в `--output-dir`; класс
+  `round(target_volume_mm3 / 100)` в диапазоне `0..200` (шаг 0.1 мл),
+  метка из финального alpha-bbox и `ellipse_center_2d_px`, `V=0` даёт
+  keypoint центра внутреннего дна. Экспорт выполняется после рендера во
+  временном work-dir (`injector3d/dataset.py`), поддерживает
+  append/overwrite, split по сериям и рекурсивную сборку batch.
+  Добавлены `--overlay-labels`, `check_dataset.py` и
+  `reports/dataset.md`.
 - **Один вертикальный кадр.** `--tilt-count 0` разрешён и означает
   вырожденную серию N+1: рендерится только вертикаль, наклонный меш не
   строится. `--mode upright` — алиас этого поведения для

@@ -22,6 +22,7 @@
 | `meniscus_mixed_prototype.md` | реализация clipped-солвера и проверки |
 | `meniscus_mixed_solver_design.md` | расчётная схема и численные детали солвера |
 | `step11_graduation.md` | градуировка: шаг шкалы из геометрии, риски и подписи на стекле |
+| `dataset.md` | YOLO-pose датасет: классы, метки, split, политика границ |
 
 ## Архив
 

@@ -253,6 +253,7 @@ SCENE_OVERLAY = {
     'ellipse_center': False,
     'center_marker': False,
     'bbox': False,
+    'labels': False,
     'font_path': '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',
     'font_size_px': 18,
     'margin_px': 12,
@@ -280,10 +281,15 @@ CLI:
 --overlay-center / --no-overlay-center
 --center-marker / --no-center-marker
 --overlay-bbox / --no-overlay-bbox
+--overlay-labels / --no-overlay-labels
 ```
 
 `--overlay-ellipse` и `--overlay-center` — синонимы: оба включают подпись
 `C3D`/`C2D`; концы осей не выводятся.
+
+`--overlay-labels` рисует строку YOLO-pose внизу слева. Это только
+отладочный preview: с `--dataset` флаг запрещён, чтобы подпись не попала
+в обучение. Формат строки — в `reports/dataset.md`.
 
 Поведение:
 
@@ -314,9 +320,10 @@ CLI:
 
 `postprocess_reference.py` добавляет `ellipse_center_2d_px` и поля bbox
 (`bbox_raw_px`, `bbox_final_px`, `bbox_center_px`, `bbox_width_px`,
-`bbox_height_px`, `bbox_alpha_threshold`, `bbox_touches_border`) в
-координатах итогового PNG. Они же используются для подписи, маркера и
-рамки; при `--no-postprocess` bbox считает `render.py`.
+`bbox_height_px`, `bbox_alpha_threshold`, `bbox_touches_border`,
+`final_width_px`, `final_height_px`) в координатах итогового PNG. Они же
+используются для подписи, маркера и рамки; при `--no-postprocess` bbox
+считает `render.py`.
 
 Имя файла:
 

@@ -20,11 +20,13 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 
 PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, PROJECT_DIR)
 
 from injector3d import config as cfg
+from injector3d import dataset as dataset_info
 from injector3d import output_manager as om
 from injector3d import timing
 
@@ -140,7 +142,9 @@ def main():
                         help='режим рендера (по умолчанию ring — серия N+1; '
                              'upright — один вертикальный кадр)')
     parser.add_argument('--output-dir', default=os.path.join(PROJECT_DIR, 'output'),
-                        help='база вывода; прогон ляжет в <output-dir>/<timestamp>')
+                        help='база вывода; прогон ляжет в '
+                             '<output-dir>/<timestamp>, а с --dataset это '
+                             'корень плоского датасета')
     parser.add_argument('--gpus', default=None,
                         help='индексы GPU через запятую, например 0,1')
     parser.add_argument('--shards', type=int, default=None,
@@ -149,9 +153,42 @@ def main():
     parser.add_argument('--dry-run', action='store_true')
     parser.add_argument('--keep-shards', action='store_true',
                         help='не удалять manifest шардов после слияния')
+    parser.add_argument('--dataset', action='store_true',
+                        help='собрать плоский датасет в --output-dir')
+    parser.add_argument('--dataset-append', action='store_true',
+                        help='дополнить существующий датасет')
+    parser.add_argument('--dataset-overwrite', action='store_true',
+                        help='перезаписать существующий датасет')
+    parser.add_argument('--dataset-split',
+                        help='доли train,val,test; по умолчанию 0.8,0.1,0.1')
+    parser.add_argument('--dataset-seed', type=int,
+                        help='seed разбиения датасета')
+    parser.add_argument('--keep-work', metavar='DIR',
+                        help='сохранить work-dir рендера в DIR')
     args, forwarded = parser.parse_known_args()
     tilt_count = _value_after(forwarded, '--tilt-count')
     tilt_angle = _value_after(forwarded, '--tilt-angle')
+
+    dataset_ratios = None
+    if args.dataset:
+        if args.dataset_append and args.dataset_overwrite:
+            raise SystemExit(
+                '--dataset-append и --dataset-overwrite взаимоисключающие')
+        if '--no-postprocess' in forwarded:
+            raise SystemExit('--dataset требует включённую постобработку')
+        if '--overlay-labels' in forwarded:
+            raise SystemExit('--overlay-labels нельзя сочетать с --dataset')
+        volume = _value_after(forwarded, '--volume-mm3')
+        if volume is None:
+            raise SystemExit('--dataset требует --volume-mm3')
+        if _value_after(forwarded, '--fill-fraction') is not None:
+            raise SystemExit('--dataset несовместим с --fill-fraction')
+        try:
+            dataset_info.class_id_for_volume_mm3(float(volume))
+            dataset_ratios = dataset_info.parse_split_ratios(
+                args.dataset_split)
+        except (dataset_info.DatasetError, ValueError) as exc:
+            raise SystemExit(f'--dataset: {exc}') from None
 
     gpus = ([int(x) for x in args.gpus.split(',')]
             if args.gpus else _detect_gpus())
@@ -197,8 +234,23 @@ def main():
         forwarded, {'--gpu-index', '--shard-index', '--shard-count',
                     '--output-dir', '--timestamp', '--mode'})
     # Общий каталог прогона создаёт launcher: все шарды пишут в него.
-    run_dir = om.render_dir(args.output_dir, ts)
-    forwarded += ['--timestamp', ts, '--output-dir', args.output_dir]
+    # В dataset-режиме `--output-dir` — корень датасета, а шарды пишут
+    # во временный work-dir.
+    dataset_root = None
+    work_root = None
+    if args.dataset:
+        dataset_root = os.path.abspath(args.output_dir)
+        if args.keep_work:
+            work_root = os.path.abspath(args.keep_work)
+            os.makedirs(work_root, exist_ok=True)
+        else:
+            work_root = tempfile.mkdtemp(prefix='injector3d_dataset_')
+        run_dir = om.render_dir(work_root, ts)
+        child_output_dir = work_root
+    else:
+        run_dir = om.render_dir(args.output_dir, ts)
+        child_output_dir = args.output_dir
+    forwarded += ['--timestamp', ts, '--output-dir', child_output_dir]
 
     blender = _blender_path(args.blender)
     script = os.path.join(PROJECT_DIR, 'injector3d', 'create_scene.py')
@@ -222,8 +274,13 @@ def main():
         print(f'Шард {shard}/{shards} -> {target}')
         if args.dry_run:
             print('  ' + ' '.join(cmd))
+    if args.dataset:
+        print(f'  датасет: {dataset_root}')
+        print(f'  work-dir: {work_root}')
 
     if args.dry_run:
+        if args.dataset and not args.keep_work:
+            shutil.rmtree(work_root, ignore_errors=True)
         return
 
     om.ensure_dir(run_dir)
@@ -250,7 +307,28 @@ def main():
         _merge_manifests(run_dir, ts, shards, args.keep_shards)
     else:
         print('  manifest финальный (один шард, слияние не требуется)')
-    print(f'Готово: {shards} шардов, каталог {run_dir}')
+    if args.dataset:
+        try:
+            summary = dataset_info.export_run(
+                dataset_root, run_dir, append=args.dataset_append,
+                overwrite=args.dataset_overwrite,
+                split_ratios=dataset_ratios, split_seed=args.dataset_seed)
+        except dataset_info.DatasetError as exc:
+            print(f'  ! Датасет не собран: {exc}')
+            print(f'  work-dir сохранён: {work_root}')
+            raise SystemExit(1) from None
+        counts = summary['counts']
+        print(f'  датасет: {dataset_root}')
+        print(f'  кадров: {counts["images"]} '
+              f'(train={counts["train"]}, val={counts["val"]}, '
+              f'test={counts["test"]})')
+        if args.keep_work:
+            print(f'  work-dir сохранён: {work_root}')
+        else:
+            shutil.rmtree(work_root, ignore_errors=True)
+        print(f'Готово: датасет {dataset_root}')
+    else:
+        print(f'Готово: {shards} шардов, каталог {run_dir}')
 
 
 if __name__ == '__main__':
